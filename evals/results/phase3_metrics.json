@@ -1,0 +1,13 @@
+{
+  "tts_success_rate": 1.0,
+  "wav_format_compliance": 1.0,
+  "avg_tts_latency_sec": 0.121,
+  "resumption_recovery_rate": 1.0,
+  "step_idempotency_rate": 1.0,
+  "remedial_insertion_verified": true,
+  "roadmap_version_incremented": true,
+  "total_scheduled_sessions": 11,
+  "distributed_study_days": 9,
+  "spaced_repetition_scheduled": true,
+  "passed_gate": true
+}

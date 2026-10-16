@@ -1,0 +1,302 @@
+[
+  {
+    "id": "goal-01",
+    "subject": "Operating Systems Internals",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 4,
+    "hours_per_week": 6.0,
+    "preferred_style": "practical systems code & diagrams",
+    "specific_objectives": ["Process scheduling", "Virtual memory paging", "Concurrency primitives"]
+  },
+  {
+    "id": "goal-02",
+    "subject": "Data Structures & Algorithms in Python",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 6,
+    "hours_per_week": 8.0,
+    "preferred_style": "visual step-by-step trace & pseudocode",
+    "specific_objectives": ["Trees & Graphs", "Dynamic Programming", "Sorting & Searching"]
+  },
+  {
+    "id": "goal-03",
+    "subject": "Distributed Systems & Consensus",
+    "target_level": "advanced",
+    "current_level": "intermediate",
+    "total_duration_weeks": 8,
+    "hours_per_week": 10.0,
+    "preferred_style": "rigorous academic papers & architectural trade-offs",
+    "specific_objectives": ["Raft consensus", "CAP theorem", "Vector clocks", "Eventual consistency"]
+  },
+  {
+    "id": "goal-04",
+    "subject": "Machine Learning Foundations",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 6,
+    "hours_per_week": 7.0,
+    "preferred_style": "mathematical intuition & intuitive analogies",
+    "specific_objectives": ["Linear regression", "Gradient descent", "Decision trees", "Evaluation metrics"]
+  },
+  {
+    "id": "goal-05",
+    "subject": "Modern Database Design & Internals",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 4,
+    "hours_per_week": 5.0,
+    "preferred_style": "SQL queries & storage engine diagrams",
+    "specific_objectives": ["B-Trees & LSM trees", "ACID transactions", "Query optimization"]
+  },
+  {
+    "id": "goal-06",
+    "subject": "Web Security & Penetration Testing",
+    "target_level": "advanced",
+    "current_level": "intermediate",
+    "total_duration_weeks": 6,
+    "hours_per_week": 8.0,
+    "preferred_style": "hands-on exploit walkthroughs & defense strategies",
+    "specific_objectives": ["OWASP Top 10", "SQL injection", "XSS & CSRF mitigation"]
+  },
+  {
+    "id": "goal-07",
+    "subject": "Rust Systems Programming",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 8,
+    "hours_per_week": 10.0,
+    "preferred_style": "compiler feedback analysis & memory diagrams",
+    "specific_objectives": ["Borrow checker & ownership", "Lifetimes", "Fearless concurrency"]
+  },
+  {
+    "id": "goal-08",
+    "subject": "Computer Networking Protocols",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 4,
+    "hours_per_week": 6.0,
+    "preferred_style": "packet traces & protocol state machines",
+    "specific_objectives": ["TCP 3-way handshake", "TLS 1.3 handshake", "DNS resolution", "HTTP/2 & HTTP/3"]
+  },
+  {
+    "id": "goal-09",
+    "subject": "Deep Learning & Neural Architectures",
+    "target_level": "advanced",
+    "current_level": "intermediate",
+    "total_duration_weeks": 8,
+    "hours_per_week": 12.0,
+    "preferred_style": "PyTorch implementations & visual tensors",
+    "specific_objectives": ["Backpropagation", "CNNs", "Transformers & Self-Attention"]
+  },
+  {
+    "id": "goal-10",
+    "subject": "Compiler Design & Code Generation",
+    "target_level": "advanced",
+    "current_level": "intermediate",
+    "total_duration_weeks": 10,
+    "hours_per_week": 10.0,
+    "preferred_style": "AST parsing & formal grammars",
+    "specific_objectives": ["Lexing & recursive descent", "Semantic analysis", "LLVM IR generation"]
+  },
+  {
+    "id": "goal-11",
+    "subject": "Cloud Infrastructure with Terraform",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 3,
+    "hours_per_week": 4.0,
+    "preferred_style": "declarative code & state management walkthroughs",
+    "specific_objectives": ["HCL syntax", "Terraform modules", "State locking & backends"]
+  },
+  {
+    "id": "goal-12",
+    "subject": "Object-Oriented Design & Design Patterns",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 4,
+    "hours_per_week": 5.0,
+    "preferred_style": "real-world refactoring & UML class diagrams",
+    "specific_objectives": ["SOLID principles", "Factory & Strategy patterns", "Decorator pattern"]
+  },
+  {
+    "id": "goal-13",
+    "subject": "Kubernetes & Container Orchestration",
+    "target_level": "advanced",
+    "current_level": "intermediate",
+    "total_duration_weeks": 6,
+    "hours_per_week": 8.0,
+    "preferred_style": "YAML manifests & architectural debugging",
+    "specific_objectives": ["Pods & Deployments", "Services & Ingress", "StatefulSets & CSI"]
+  },
+  {
+    "id": "goal-14",
+    "subject": "High-Performance Go Microservices",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 5,
+    "hours_per_week": 6.0,
+    "preferred_style": "concurrency benchmarks & idiomatic code",
+    "specific_objectives": ["Goroutines & channels", "gRPC services", "Profiling with pprof"]
+  },
+  {
+    "id": "goal-15",
+    "subject": "Cryptography Engineering",
+    "target_level": "advanced",
+    "current_level": "intermediate",
+    "total_duration_weeks": 6,
+    "hours_per_week": 7.0,
+    "preferred_style": "mathematical proofs & protocol security analysis",
+    "specific_objectives": ["AES-GCM", "RSA & Elliptic curves", "Diffie-Hellman key exchange"]
+  },
+  {
+    "id": "goal-16",
+    "subject": "Full-Stack React & Next.js Architecture",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 4,
+    "hours_per_week": 6.0,
+    "preferred_style": "component hierarchies & state flow diagrams",
+    "specific_objectives": ["Server Components", "Routing & caching", "Server Actions"]
+  },
+  {
+    "id": "goal-17",
+    "subject": "Kafka & Event-Driven Architecture",
+    "target_level": "advanced",
+    "current_level": "intermediate",
+    "total_duration_weeks": 5,
+    "hours_per_week": 6.0,
+    "preferred_style": "stream processing diagrams & partition strategies",
+    "specific_objectives": ["Topic partitioning", "Consumer groups", "Exactly-once semantics"]
+  },
+  {
+    "id": "goal-18",
+    "subject": "Linux Kernel Module Development",
+    "target_level": "advanced",
+    "current_level": "intermediate",
+    "total_duration_weeks": 8,
+    "hours_per_week": 10.0,
+    "preferred_style": "C code in QEMU & kernel ring buffer traces",
+    "specific_objectives": ["Device drivers", "Interrupt handlers", "Kernel memory allocation"]
+  },
+  {
+    "id": "goal-19",
+    "subject": "Functional Programming in Haskell",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 6,
+    "hours_per_week": 6.0,
+    "preferred_style": "type signatures & pure function composition",
+    "specific_objectives": ["Monads & Functors", "Lazy evaluation", "Typeclasses"]
+  },
+  {
+    "id": "goal-20",
+    "subject": "Observability & Site Reliability Engineering",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 4,
+    "hours_per_week": 5.0,
+    "preferred_style": "dashboards, SLO definitions & incident runbooks",
+    "specific_objectives": ["Prometheus metrics", "OpenTelemetry tracing", "SLIs and SLOs"]
+  },
+  {
+    "id": "goal-21",
+    "subject": "Reinforcement Learning Fundamentals",
+    "target_level": "advanced",
+    "current_level": "intermediate",
+    "total_duration_weeks": 8,
+    "hours_per_week": 8.0,
+    "preferred_style": "Bellman equations & policy gradient derivations",
+    "specific_objectives": ["Markov Decision Processes", "Q-Learning", "PPO algorithms"]
+  },
+  {
+    "id": "goal-22",
+    "subject": "GraphQL API Design & Optimization",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 3,
+    "hours_per_week": 4.0,
+    "preferred_style": "schema definitions & N+1 problem solutions",
+    "specific_objectives": ["Schema design", "DataLoader pattern", "Federation"]
+  },
+  {
+    "id": "goal-23",
+    "subject": "Computer Vision with OpenCV",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 5,
+    "hours_per_week": 6.0,
+    "preferred_style": "visual image filters & matrix transformations",
+    "specific_objectives": ["Image filtering", "Edge detection", "Feature matching"]
+  },
+  {
+    "id": "goal-24",
+    "subject": "Clean Code & Refactoring Patterns",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 3,
+    "hours_per_week": 4.0,
+    "preferred_style": "before-and-after code diffs & code smell analysis",
+    "specific_objectives": ["Code smells", "Extract Method refactoring", "Test-driven development"]
+  },
+  {
+    "id": "goal-25",
+    "subject": "Graph Databases & Cypher Queries",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 4,
+    "hours_per_week": 5.0,
+    "preferred_style": "network visual graphs & traversal queries",
+    "specific_objectives": ["Property graph models", "Cypher traversals", "Recommendation engines"]
+  },
+  {
+    "id": "goal-26",
+    "subject": "Cyber Threat Intelligence & MITRE ATT&CK",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 4,
+    "hours_per_week": 5.0,
+    "preferred_style": "threat actor case studies & kill chain analysis",
+    "specific_objectives": ["ATT&CK matrix", "TTP analysis", "YARA rules"]
+  },
+  {
+    "id": "goal-27",
+    "subject": "Natural Language Processing with Hugging Face",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 6,
+    "hours_per_week": 8.0,
+    "preferred_style": "tokenization pipelines & model fine-tuning",
+    "specific_objectives": ["BPE tokenization", "BERT fine-tuning", "LoRA and PEFT"]
+  },
+  {
+    "id": "goal-28",
+    "subject": "Vector Search & Retrieval-Augmented Generation",
+    "target_level": "advanced",
+    "current_level": "intermediate",
+    "total_duration_weeks": 4,
+    "hours_per_week": 6.0,
+    "preferred_style": "embedding distance spaces & hybrid fusion code",
+    "specific_objectives": ["Cosine vs dot product", "HNSW indexing", "Reciprocal rank fusion"]
+  },
+  {
+    "id": "goal-29",
+    "subject": "Mobile App Development with Flutter",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 5,
+    "hours_per_week": 6.0,
+    "preferred_style": "widget tree diagrams & reactive state flow",
+    "specific_objectives": ["Stateless vs Stateful", "Provider & Bloc", "Platform channels"]
+  },
+  {
+    "id": "goal-30",
+    "subject": "Continuous Integration & Deployment (CI/CD)",
+    "target_level": "intermediate",
+    "current_level": "beginner",
+    "total_duration_weeks": 3,
+    "hours_per_week": 4.0,
+    "preferred_style": "pipeline YAML files & automated testing stages",
+    "specific_objectives": ["GitHub Actions workflows", "Docker build caches", "Canary deployments"]
+  }
+]

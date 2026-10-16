@@ -1,0 +1,35 @@
+# Python & Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Testing & Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+*.coverage.*
+
+# Environment & Secrets (NEVER COMMIT SECRETS)
+.env
+!.env.example
+*.pem
+*.key
+
+# Frontend Node & Dependencies
+frontend/node_modules/
+.npm
+.yarn
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

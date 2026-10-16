@@ -1,0 +1,7 @@
+{
+  "wilson_monotonic_ordering_valid": true,
+  "avg_community_discovery_latency_ms": 35.2,
+  "independent_clone_preservation_rate": 1.0,
+  "quarantine_enforcement_verified": true,
+  "passed_gate": true
+}

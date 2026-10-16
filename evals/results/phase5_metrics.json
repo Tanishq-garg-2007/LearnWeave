@@ -1,0 +1,22 @@
+{
+  "system_health_status": "healthy",
+  "readiness_verified": true,
+  "health_endpoint_latency_ms": 3.21,
+  "roadmap_2week_sprint_enforced": true,
+  "roadmap_generation_latency_s": 2.72,
+  "note_chunking_success": true,
+  "note_chunk_count": 1,
+  "upload_and_embedding_latency_ms": 694.76,
+  "learning_cycle_step_lesson_gen": true,
+  "tts_synthesis_success": true,
+  "tts_latency_s": 0.055,
+  "quiz_evaluation_success": true,
+  "quiz_score_percentage": 28.0,
+  "study_schedule_generated": true,
+  "total_scheduled_sessions": 2,
+  "community_wilson_score": 0.2065,
+  "independent_clone_preservation": true,
+  "cross_user_privacy_leakage": 0.0,
+  "all_phase_invariants_passed": true,
+  "passed_gate": true
+}
