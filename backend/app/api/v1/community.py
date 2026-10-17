@@ -1,15 +1,21 @@
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, func, and_, or_, desc
+from sqlalchemy import select, func, or_, desc
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.sql_utils import escape_like
 from app.db.session import get_db
 from app.db.models import User, Workspace, Note, NoteChunk, NoteVote, NoteReport
 from app.api.deps import get_current_user
-from app.services.wilson_service import calculate_wilson_score, update_note_wilson_score
+from app.api.error_utils import internal_error
+from app.services.wilson_service import update_note_wilson_score
+
+QUARANTINE_THRESHOLD = 3  # distinct reporting accounts needed to quarantine a public note
+QUARANTINED_VISIBILITY = "reported_quarantine"
 
 logger = logging.getLogger("learnweave.api.community")
 router = APIRouter(prefix="/community", tags=["Community Library & Moderation"])
@@ -46,10 +52,10 @@ class CommunityNoteResponse(BaseModel):
 
 @router.get("/notes", response_model=Dict[str, Any])
 async def list_community_notes(
-    query: Optional[str] = None,
-    subject: Optional[str] = None,
-    tag: Optional[str] = None,
-    sort_by: Optional[str] = "wilson",  # wilson, latest, upvotes
+    query: Optional[str] = Query(None, max_length=200),
+    subject: Optional[str] = Query(None, max_length=255),
+    tag: Optional[str] = Query(None, max_length=50),
+    sort_by: Literal["wilson", "latest", "upvotes"] = "wilson",
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     user: User = Depends(get_current_user),
@@ -93,13 +99,13 @@ async def list_community_notes(
     )
 
     if subject:
-        stmt = stmt.where(Note.subject.ilike(f"%{subject}%"))
+        stmt = stmt.where(Note.subject.ilike(f"%{escape_like(subject)}%", escape="\\"))
 
     if query:
         stmt = stmt.where(
             or_(
-                Note.title.ilike(f"%{query}%"),
-                Note.raw_content.ilike(f"%{query}%")
+                Note.title.ilike(f"%{escape_like(query)}%", escape="\\"),
+                Note.raw_content.ilike(f"%{escape_like(query)}%", escape="\\")
             )
         )
 
@@ -114,9 +120,9 @@ async def list_community_notes(
     # Total count
     count_stmt = select(func.count(Note.id)).where(Note.visibility == "public")
     if subject:
-        count_stmt = count_stmt.where(Note.subject.ilike(f"%{subject}%"))
+        count_stmt = count_stmt.where(Note.subject.ilike(f"%{escape_like(subject)}%", escape="\\"))
     if query:
-        count_stmt = count_stmt.where(or_(Note.title.ilike(f"%{query}%"), Note.raw_content.ilike(f"%{query}%")))
+        count_stmt = count_stmt.where(or_(Note.title.ilike(f"%{escape_like(query)}%", escape="\\"), Note.raw_content.ilike(f"%{escape_like(query)}%", escape="\\")))
     total_res = await db.execute(count_stmt)
     total_count = total_res.scalar() or 0
 
@@ -160,7 +166,8 @@ async def vote_note(
 ):
     """
     Cast an upvote (+1) or downvote (-1) on a public community note.
-    Atomically recomputes the Wilson confidence interval lower bound.
+    Voting the same value again removes the vote. Owners cannot vote on their own notes.
+    The vote, the counts and the Wilson score are written in one transaction.
     """
     if req.vote_value not in (-1, 1):
         raise HTTPException(
@@ -168,52 +175,47 @@ async def vote_note(
             detail="vote_value must be exactly +1 (upvote) or -1 (downvote)"
         )
 
-    # Check note exists and is public
-    n_res = await db.execute(select(Note).where(Note.id == note_id))
+    # Lock the note row: votes on the same note are serialized, so counts cannot be lost.
+    n_res = await db.execute(select(Note).where(Note.id == note_id).with_for_update())
     note = n_res.scalar_one_or_none()
-    if not note:
+    if not note or note.visibility != "public":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
-    if note.visibility != "public":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Can only vote on public notes")
+    if note.owner_id == user.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot vote on your own note")
 
-    # Check existing vote
     v_res = await db.execute(
-        select(NoteVote).where(
-            NoteVote.note_id == note_id,
-            NoteVote.user_id == user.id
-        )
+        select(NoteVote).where(NoteVote.note_id == note_id, NoteVote.user_id == user.id)
     )
     existing_vote = v_res.scalar_one_or_none()
 
-    if existing_vote:
-        if existing_vote.vote_value == req.vote_value:
-            # Toggle off if clicked same button again
-            await db.delete(existing_vote)
-            await db.commit()
+    try:
+        if existing_vote:
+            if existing_vote.vote_value == req.vote_value:
+                await db.delete(existing_vote)  # same button again removes the vote
+            else:
+                existing_vote.vote_value = req.vote_value
         else:
-            existing_vote.vote_value = req.vote_value
-            await db.commit()
-    else:
-        new_vote = NoteVote(
-            user_id=user.id,
-            note_id=note_id,
-            vote_value=req.vote_value
-        )
-        db.add(new_vote)
+            db.add(NoteVote(user_id=user.id, note_id=note_id, vote_value=req.vote_value))
+
+        # Session autoflush is off: flush so the aggregate below sees this vote.
+        await db.flush()
+        new_wilson = await update_note_wilson_score(db, note_id, note=note)
         await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise internal_error(
+            logger, exc, "Vote could not be recorded, please retry",
+            status_code=status.HTTP_409_CONFLICT,
+        )
 
-    # Recompute Wilson Score
-    new_wilson = await update_note_wilson_score(db, note_id)
-
-    # Fetch updated counts
-    up_res = await db.execute(
-        select(func.count(NoteVote.id)).where(NoteVote.note_id == note_id, NoteVote.vote_value == 1)
+    counts_res = await db.execute(
+        select(NoteVote.vote_value, func.count(NoteVote.id))
+        .where(NoteVote.note_id == note_id)
+        .group_by(NoteVote.vote_value)
     )
-    down_res = await db.execute(
-        select(func.count(NoteVote.id)).where(NoteVote.note_id == note_id, NoteVote.vote_value == -1)
-    )
-    upvotes = up_res.scalar() or 0
-    downvotes = down_res.scalar() or 0
+    counts = {int(value): int(count) for value, count in counts_res.all()}
+    upvotes = counts.get(1, 0)
+    downvotes = counts.get(-1, 0)
 
     return {
         "note_id": note_id,
@@ -241,11 +243,11 @@ async def import_note(
         select(Note).options(selectinload(Note.chunks)).where(Note.id == note_id)
     )
     source_note = res.scalar_one_or_none()
-    if not source_note:
+    if not source_note or source_note.visibility != "public":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source note not found")
 
-    if source_note.visibility != "public":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot import non-public notes")
+    if source_note.owner_id == user.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You already own this note")
 
     # Get student workspace
     w_res = await db.execute(select(Workspace).where(Workspace.user_id == user.id))
@@ -313,12 +315,22 @@ async def report_note(
 ):
     """
     Report inappropriate or violating public note content.
-    If 3 or more pending reports accumulate, automatically quarantines the note.
+    Each account can report a note once. When QUARANTINE_THRESHOLD distinct accounts have
+    reported it, the note is quarantined and cannot be republished by its owner.
     """
-    res = await db.execute(select(Note).where(Note.id == note_id))
+    # Lock the note row so concurrent reports are counted exactly once each.
+    res = await db.execute(select(Note).where(Note.id == note_id).with_for_update())
     note = res.scalar_one_or_none()
-    if not note:
+    if not note or note.visibility not in ("public", QUARANTINED_VISIBILITY):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+    if note.owner_id == user.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot report your own note")
+
+    dup_res = await db.execute(
+        select(NoteReport.id).where(NoteReport.note_id == note.id, NoteReport.reporter_id == user.id)
+    )
+    if dup_res.first() is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="You have already reported this note")
 
     report = NoteReport(
         reporter_id=user.id,
@@ -327,29 +339,33 @@ async def report_note(
         status="pending"
     )
     db.add(report)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="You have already reported this note")
 
-    # Count pending reports
+    # Count distinct reporting accounts, not rows.
     cnt_res = await db.execute(
-        select(func.count(NoteReport.id)).where(
+        select(func.count(func.distinct(NoteReport.reporter_id))).where(
             NoteReport.note_id == note.id,
             NoteReport.status == "pending"
         )
     )
-    report_count = cnt_res.scalar() or 0
+    report_count = int(cnt_res.scalar() or 0)
 
     quarantined = False
-    if report_count >= 3:
-        note.visibility = "reported_quarantine"
+    if report_count >= QUARANTINE_THRESHOLD and note.visibility == "public":
+        note.visibility = QUARANTINED_VISIBILITY
         quarantined = True
-        logger.warning(f"Note {note.id} reached {report_count} reports. Quarantining immediately.")
+        logger.warning(f"Note {note.id} reached {report_count} distinct reporters. Quarantining.")
 
     await db.commit()
 
     return {
         "note_id": note_id,
         "total_reports": report_count,
-        "quarantined": quarantined,
+        "quarantined": quarantined or note.visibility == QUARANTINED_VISIBILITY,
         "message": "Report logged. Content quarantined from public library." if quarantined else "Report received for moderation review."
     }
 
@@ -361,17 +377,23 @@ async def publish_or_privatize_note(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Publish a personal note to the community or withdraw it to private."""
+    """Publish a personal note to the community or withdraw it to private.
+
+    Quarantined notes cannot be changed by the owner while under moderation.
+    """
     if req.visibility not in ("public", "private"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Visibility must be 'public' or 'private'")
 
     res = await db.execute(select(Note).where(Note.id == note_id))
     note = res.scalar_one_or_none()
-    if not note:
+    if not note or note.owner_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
 
-    if note.owner_id != user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only note owner can change visibility")
+    if note.visibility == QUARANTINED_VISIBILITY:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This note is quarantined after community reports and cannot be changed"
+        )
 
     note.visibility = req.visibility
     await db.commit()

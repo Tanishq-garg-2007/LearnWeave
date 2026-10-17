@@ -1,9 +1,10 @@
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.db.models import Lesson, LearnerProfile, User
+from app.db.models import LearnerProfile, User
+from app.services.ownership import get_owned_lesson
 from app.services.retrieval_service import retriever
 from app.services.groq_client import groq_client
 from app.schemas.lessons import DoubtResponse, DoubtCitation
@@ -37,18 +38,16 @@ class DoubtAgent:
         doubt_text: str,
         user: User
     ) -> DoubtResponse:
-        res = await db.execute(select(Lesson).where(Lesson.id == lesson_id))
-        lesson = res.scalar_one_or_none()
-        if not lesson:
-            raise ValueError(f"Lesson {lesson_id} not found")
+        lesson = await get_owned_lesson(db, lesson_id, user)
 
         # 1. Retrieve note chunks relevant to the doubt
-        retrieved_chunks = await retriever.retrieve(
+        retrieval = await retriever.retrieve_detailed(
             db=db,
             query=f"{lesson.title} {doubt_text}",
             user_id=user.id,
             top_k=3
         )
+        retrieved_chunks = retrieval.chunks
 
         lesson_context = ""
         if lesson.lesson_content:
@@ -94,7 +93,7 @@ INSTRUCTIONS:
             answer_text = raw_data.get("answer", "")
             cited_ids = set(raw_data.get("cited_chunk_ids", []))
         except Exception as exc:
-            logger.warning(f"Groq doubt call failed: {exc}. Using structured fallback.")
+            logger.warning(f"Groq doubt call failed: {exc!r}. Using structured fallback.")
             answer_text = (
                 f"Regarding your question on '{doubt_text}': In the context of {lesson.title}, "
                 "this concept relates to how systems balance state consistency, computational isolation, and resource scheduling. "
@@ -136,7 +135,8 @@ INSTRUCTIONS:
             lesson_id=lesson.id,
             doubt=doubt_text,
             answer=answer_text,
-            citations=citations
+            citations=citations,
+            retrieval_degraded=retrieval.degraded
         )
 
 

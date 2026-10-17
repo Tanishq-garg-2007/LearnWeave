@@ -272,7 +272,8 @@ async def test_formative_quiz_and_evaluation_cycle():
         lesson_id = g_res.json()["modules"][0]["lessons"][0]["id"]
 
         # 1. Fetch Quiz (Sanitized)
-        quiz_res = await client.get(f"/api/v1/lessons/{lesson_id}/quiz", headers=headers)
+        # Generation is POST (round 2 contract); GET only reads an existing quiz.
+        quiz_res = await client.post(f"/api/v1/lessons/{lesson_id}/quiz", headers=headers)
         assert quiz_res.status_code == 200
         quiz = quiz_res.json()
         assert len(quiz["questions"]) == 4

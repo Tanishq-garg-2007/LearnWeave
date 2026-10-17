@@ -14,6 +14,8 @@ import {
   Lesson,
   getAuthToken,
   clearAuthToken,
+  ApiError,
+  UNAUTHORIZED_EVENT,
   CreateGoalPayload
 } from "./api/client";
 import { Sparkles, BookOpen, Compass, ShieldCheck, Zap, Layers, RefreshCw } from "lucide-react";
@@ -38,9 +40,14 @@ export const App: React.FC = () => {
       setUser(profile);
       fetchActiveRoadmap();
     } catch (err) {
-      console.error("Session expired or invalid:", err);
-      clearAuthToken();
-      setUser(null);
+      // Only a rejected token ends the session. A network blip or a 5xx must not log the user out.
+      if (err instanceof ApiError && err.status === 401) {
+        clearAuthToken();
+        setUser(null);
+      } else {
+        console.error("Could not load profile:", err);
+        setError("Could not reach the server. Your session is kept; please retry in a moment.");
+      }
     }
   };
 
@@ -51,8 +58,11 @@ export const App: React.FC = () => {
       setActiveRoadmap(roadmap);
       setError(null);
     } catch (err: any) {
-      // 404 means no active roadmap yet
-      setActiveRoadmap(null);
+      if (err instanceof ApiError && err.status === 404) {
+        setActiveRoadmap(null); // no active roadmap yet
+      } else if (!(err instanceof ApiError && err.status === 401)) {
+        setError(err?.message || "Failed to load your roadmap");
+      }
     } finally {
       setIsLoadingRoadmap(false);
     }
@@ -60,6 +70,19 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     fetchUserData();
+  }, []);
+
+  // Any authenticated call that returns 401 (expired/revoked token) logs the user out cleanly.
+  useEffect(() => {
+    const onUnauthorized = () => {
+      clearAuthToken();
+      setUser(null);
+      setActiveRoadmap(null);
+      setSelectedLesson(null);
+      setError("Your session expired. Please sign in again.");
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
   }, []);
 
   const handleCreateGoal = async (payload: CreateGoalPayload) => {

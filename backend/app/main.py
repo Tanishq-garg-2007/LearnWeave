@@ -15,6 +15,7 @@ from app.api.v1.cycle import router as cycle_router
 from app.api.v1.schedule import router as schedule_router
 from app.api.v1.community import router as community_router
 from app.services.groq_client import GroqClientError
+from app.api.error_utils import new_error_reference
 
 logging.basicConfig(
     level=settings.LOG_LEVEL,
@@ -23,23 +24,34 @@ logging.basicConfig(
 logger = logging.getLogger("learnweave.main")
 
 
+def _is_dev_env() -> bool:
+    return settings.APP_ENV.strip().lower() == "development"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing LearnWeave AI backend service...")
     if not settings.GROQ_API_KEY:
-        logger.warning("GROQ_API_KEY is not set. External AI features will run in mock/degraded mode.")
+        msg = "GROQ_API_KEY is not set. All AI features (lessons, quizzes, doubts, roadmaps, STT) will return errors."
+        if not _is_dev_env():
+            raise RuntimeError(msg)
+        logger.warning(msg)
     else:
         logger.info(f"Groq primary model: {settings.GROQ_PRIMARY_MODEL} | Fallback: {settings.GROQ_FALLBACK_MODEL}")
     yield
     logger.info("Shutting down LearnWeave AI backend...")
 
 
+# API docs are published only in development; they describe the full API surface to anyone.
+_is_dev = settings.APP_ENV.strip().lower() == "development"
+
 app = FastAPI(
     title="LearnWeave AI — Agentic Learning Platform",
     description="Adaptive, personalized, privacy-conscious long-term learning companion.",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/docs" if _is_dev else None,
+    redoc_url="/redoc" if _is_dev else None,
+    openapi_url="/openapi.json" if _is_dev else None,
     lifespan=lifespan
 )
 
@@ -55,9 +67,15 @@ app.add_middleware(
 # Exception handlers
 @app.exception_handler(GroqClientError)
 async def groq_exception_handler(request: Request, exc: GroqClientError):
+    # Upstream response bodies stay in the log; clients get a generic message and a reference id.
+    ref = new_error_reference()
+    logger.error(f"[ref={ref}] Groq error (upstream status={exc.status_code}, retryable={exc.retryable}): {exc}")
     return JSONResponse(
-        status_code=exc.status_code or 503,
-        content={"detail": str(exc), "retryable": exc.retryable}
+        status_code=503 if exc.retryable else 502,
+        content={
+            "detail": f"The AI service is temporarily unavailable. Please try again. (reference: {ref})",
+            "retryable": exc.retryable,
+        }
     )
 
 @app.get("/health", tags=["Health"])

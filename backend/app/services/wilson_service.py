@@ -27,23 +27,25 @@ def calculate_wilson_score(upvotes: int, downvotes: int, confidence: float = 0.9
     return max(0.0, min(1.0, round(score, 4)))
 
 
-async def update_note_wilson_score(db: AsyncSession, note_id: str) -> float:
-    """Recomputes and persists the Wilson score for a given note."""
-    up_res = await db.execute(
-        select(func.count(NoteVote.id)).where(NoteVote.note_id == note_id, NoteVote.vote_value == 1)
-    )
-    down_res = await db.execute(
-        select(func.count(NoteVote.id)).where(NoteVote.note_id == note_id, NoteVote.vote_value == -1)
-    )
-    upvotes = up_res.scalar() or 0
-    downvotes = down_res.scalar() or 0
+async def update_note_wilson_score(db: AsyncSession, note_id: str, note: Note = None) -> float:
+    """Recompute the Wilson score from one aggregate query and store it on the note.
 
-    score = calculate_wilson_score(upvotes, downvotes)
+    Does NOT commit: the caller owns the transaction, so the vote write and the score
+    update succeed or fail together.
+    """
+    rows = await db.execute(
+        select(NoteVote.vote_value, func.count(NoteVote.id))
+        .where(NoteVote.note_id == note_id)
+        .group_by(NoteVote.vote_value)
+    )
+    counts = {int(value): int(count) for value, count in rows.all()}
+    score = calculate_wilson_score(counts.get(1, 0), counts.get(-1, 0))
 
-    note_res = await db.execute(select(Note).where(Note.id == note_id))
-    note = note_res.scalar_one_or_none()
-    if note:
+    if note is None:
+        note_res = await db.execute(select(Note).where(Note.id == note_id))
+        note = note_res.scalar_one_or_none()
+    if note is not None:
         note.wilson_score = score
-        await db.commit()
+        await db.flush()
 
     return score

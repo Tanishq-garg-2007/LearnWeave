@@ -243,7 +243,7 @@ async def test_study_scheduler_and_pacing():
         sessions = list_res.json()["sessions"]
         assert len(sessions) >= 2
         first_session = sessions[0]
-        assert first_session["status"] == "scheduled"
+        assert first_session["status"] == "pending"  # contract: new sessions are pending
 
         # 3. Mark completed
         update_res = await client.put(

@@ -1,7 +1,19 @@
+import logging
 import os
+import secrets
 from typing import List, Union
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger("learnweave.config")
+
+# Values that must never be used to sign tokens or connect to a shared database.
+KNOWN_INSECURE_JWT_SECRETS = {
+    "",
+    "learnweave-super-secret-key-change-in-production-12345",
+}
+MIN_JWT_SECRET_LENGTH = 32
+INSECURE_DB_CREDENTIAL_MARKER = "postgres:postgres@"
 
 
 class Settings(BaseSettings):
@@ -20,8 +32,12 @@ class Settings(BaseSettings):
     GROQ_TIMEOUT_SECONDS: int = 60
     GROQ_MAX_RETRIES: int = 3
     GROQ_MAX_COMBINED_TOKENS: int = 6000
+    GROQ_MAX_RPM: int = 28
+    GROQ_MAX_TPM: int = 8000
+    GROQ_TOTAL_DEADLINE_SECONDS: int = 45
 
-    # PostgreSQL Database
+    # PostgreSQL Database (local-development defaults only; non-development
+    # environments refuse to start with the default credentials, see _check_security)
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = "postgres"
     POSTGRES_DB: str = "learnweave"
@@ -30,7 +46,10 @@ class Settings(BaseSettings):
     SYNC_DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5432/learnweave"
 
     # Security & Auth
-    JWT_SECRET: str = "learnweave-super-secret-key-change-in-production-12345"
+    # No default secret: outside APP_ENV=development the app refuses to start without a
+    # random value of at least 32 characters. In development a random per-process secret
+    # is generated when this is unset (tokens then do not survive a restart).
+    JWT_SECRET: str = ""
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
@@ -43,6 +62,10 @@ class Settings(BaseSettings):
     # Integrations
     ENABLE_MEM0: bool = False
 
+    # Rate limiting (per process)
+    RATE_LIMIT_ENABLED: bool = True
+    USER_DAILY_LLM_CALLS: int = 300
+
     # App Settings
     APP_ENV: str = "development"
     LOG_LEVEL: str = "INFO"
@@ -54,6 +77,35 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [i.strip() for i in v.split(",") if i.strip()]
         return v
+
+    @model_validator(mode="after")
+    def _check_security(self) -> "Settings":
+        is_dev = self.APP_ENV.strip().lower() == "development"
+        secret_is_weak = (
+            self.JWT_SECRET in KNOWN_INSECURE_JWT_SECRETS or len(self.JWT_SECRET) < MIN_JWT_SECRET_LENGTH
+        )
+
+        if is_dev:
+            if secret_is_weak:
+                self.JWT_SECRET = secrets.token_urlsafe(48)
+                logger.warning(
+                    "JWT_SECRET is unset or weak; using a random per-process secret for development. "
+                    "Tokens will be invalid after a restart. Set JWT_SECRET in .env to fix this."
+                )
+            return self
+
+        if secret_is_weak:
+            raise ValueError(
+                f"JWT_SECRET must be set to a random value of at least {MIN_JWT_SECRET_LENGTH} characters "
+                f"when APP_ENV is '{self.APP_ENV}' (generate one with: "
+                "python -c \"import secrets; print(secrets.token_urlsafe(48))\")."
+            )
+        if INSECURE_DB_CREDENTIAL_MARKER in self.DATABASE_URL or INSECURE_DB_CREDENTIAL_MARKER in self.SYNC_DATABASE_URL:
+            raise ValueError(
+                "DATABASE_URL/SYNC_DATABASE_URL still use the default postgres:postgres credentials. "
+                f"Set a real database password when APP_ENV is '{self.APP_ENV}'."
+            )
+        return self
 
 
 settings = Settings()

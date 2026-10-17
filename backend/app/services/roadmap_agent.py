@@ -38,11 +38,11 @@ class RoadmapPlanningAgent:
             "1. TWO-WEEK DETAILED WINDOW: You must generate detailed lessons ONLY for Weeks 1 and 2.\n"
             "2. FUTURE PLACEHOLDERS: For any week > 2 up to the total duration, you MUST set is_planned_later=true, "
             "and provide an empty or single placeholder lesson with title 'Plan Later: Future Module'.\n"
-            "3. WEEKLY TIME BUDGET: The student has {goal.hours_per_week} hours/week. Total lesson duration per week "
+            f"3. WEEKLY TIME BUDGET: The student has {goal.hours_per_week} hours/week. Total lesson duration per week "
             "must stay within this budget.\n"
             "4. PREREQUISITES: Prerequisite titles must refer strictly to earlier lessons already introduced.\n"
             "5. REVISION: Include at least one short recap/revision lesson in Week 2.\n"
-            "6. PEDAGOGY: Tailor explanations to style: '{style}' and current proficiency: '{goal.current_level}'."
+            f"6. PEDAGOGY: Tailor explanations to style: '{style}' and current proficiency: '{goal.current_level}'."
         )
 
         user_prompt = (
@@ -65,7 +65,7 @@ class RoadmapPlanningAgent:
         output: RoadmapGenerationOutput = await self.client.structured_completion(
             messages=messages,
             schema=RoadmapGenerationOutput,
-            max_tokens=900,
+            max_tokens=2500,
             temperature=0.2
         )
 
@@ -74,6 +74,9 @@ class RoadmapPlanningAgent:
         if not is_valid:
             logger.info(f"Roadmap business rules adjusted via pedagogical sanitizer: {errors}")
             output = self._deterministic_sanitize(output, goal)
+            ok, remaining = self.validate_roadmap_rules(output, goal)
+            if not ok:
+                raise RoadmapValidationError(remaining)
 
         return output
 
@@ -98,6 +101,19 @@ class RoadmapPlanningAgent:
             max_week = max(m.target_week for m in roadmap.modules)
             if max_week != goal.total_duration_weeks:
                 errors.append(f"Expected {goal.total_duration_weeks} weeks, but found max week {max_week}")
+
+        for w in (1, 2):
+            if w <= goal.total_duration_weeks and not any(m.target_week == w for m in roadmap.modules):
+                errors.append(f"Missing module for week {w}")
+        if goal.total_duration_weeks >= 2:
+            wk2 = [m for m in roadmap.modules if m.target_week == 2]
+            if wk2 and not any(l.is_revision for m in wk2 for l in m.lessons):
+                errors.append("Week 2 must include a revision lesson")
+        if any(m.target_week > goal.total_duration_weeks for m in roadmap.modules):
+            errors.append("Modules exist beyond total_duration_weeks")
+        for m in roadmap.modules:
+            if m.target_week > 2 and m.lessons:
+                errors.append(f"Future week {m.target_week} must not have detailed lessons")
 
         # 2. Two-week detailed planning window check
         seen_lesson_titles = set()
@@ -132,8 +148,15 @@ class RoadmapPlanningAgent:
         goal: GoalCreateRequest
     ) -> RoadmapGenerationOutput:
         """Deterministic correction guaranteeing rule compliance without infinite LLM loops."""
+        if not roadmap.modules:
+            raise RoadmapValidationError(["Curriculum has no modules"])
         sanitized_modules = []
         existing_weeks = set()
+        max_minutes = int(goal.hours_per_week * 60)
+        # Drop modules outside the requested duration.
+        roadmap.modules = [m for m in roadmap.modules if m.target_week <= goal.total_duration_weeks]
+        if not roadmap.modules:
+            raise RoadmapValidationError(["No modules within the requested duration"])
         for mod in roadmap.modules:
             existing_weeks.add(mod.target_week)
             if mod.target_week <= 2:
@@ -151,10 +174,44 @@ class RoadmapPlanningAgent:
                             duration_minutes=45
                         )
                     ]
+                # Time budget: trim trailing lessons until the module fits the weekly budget.
+                while len(mod.lessons) > 1 and sum(l.duration_minutes for l in mod.lessons) > max_minutes * 1.5:
+                    mod.lessons.pop()
+                # Prerequisites may only point at earlier lessons.
+                seen = set()
+                for les in mod.lessons:
+                    les.prerequisite_titles = [t for t in les.prerequisite_titles if t in seen]
+                    seen.add(les.title)
             else:
                 mod.is_planned_later = True
                 mod.lessons = [] # Future weeks are placeholders
             sanitized_modules.append(mod)
+
+        # Weeks 1 and 2 must exist.
+        for w in (1, 2):
+            if w > goal.total_duration_weeks or w in existing_weeks:
+                continue
+            sanitized_modules.append(PlannedModule(
+                title=f"{goal.subject}: Week {w} Core Practice",
+                description=f"Core practice for week {w}.",
+                target_week=w, is_planned_later=False,
+                estimated_hours=min(goal.hours_per_week, 40.0) or 1.0,
+                lessons=[PlannedLesson(
+                    title=f"{goal.subject}: Week {w} Overview",
+                    learning_objectives=[f"Review and apply week {w} material"],
+                    duration_minutes=45)],
+            ))
+            existing_weeks.add(w)
+
+        # Rule 5: a revision lesson in week 2 (when the course reaches week 2).
+        if goal.total_duration_weeks >= 2:
+            wk2 = [m for m in sanitized_modules if m.target_week == 2 and not m.is_planned_later]
+            if wk2 and not any(l.is_revision for m in wk2 for l in m.lessons):
+                wk2[0].lessons.append(PlannedLesson(
+                    title=f"Revision: {goal.subject} Recap",
+                    learning_objectives=["Revise key ideas from weeks 1-2"],
+                    duration_minutes=30, is_revision=True))
+        sanitized_modules.sort(key=lambda m: m.target_week)
 
         if goal.total_duration_weeks > 2:
             for w in range(3, goal.total_duration_weeks + 1):

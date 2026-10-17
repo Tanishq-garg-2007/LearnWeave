@@ -23,7 +23,7 @@ export const CommunityView: React.FC<CommunityViewProps> = ({ onNoteImported }) 
   const [notes, setNotes] = useState<NoteItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [sortOrder, setSortOrder] = useState<"wilson" | "recent">("wilson");
+  const [sortOrder, setSortOrder] = useState<"wilson" | "latest">("wilson");
   const [importingId, setImportingId] = useState<string | null>(null);
   const [reportingId, setReportingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -159,9 +159,9 @@ export const CommunityView: React.FC<CommunityViewProps> = ({ onNoteImported }) 
 
               <button
                 type="button"
-                onClick={() => setSortOrder("recent")}
+                onClick={() => setSortOrder("latest")}
                 className={`flex-1 py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 border transition-all ${
-                  sortOrder === "recent"
+                  sortOrder === "latest"
                     ? "bg-purple-600 text-white border-purple-500 shadow-lg shadow-purple-600/20"
                     : "bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200"
                 }`}

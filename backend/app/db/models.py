@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from sqlalchemy import (
-    Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+    Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
@@ -103,6 +103,9 @@ class Roadmap(Base):
 
 class RoadmapVersion(Base):
     __tablename__ = "roadmap_versions"
+    __table_args__ = (
+        UniqueConstraint("roadmap_id", "version_number", name="uq_roadmap_version_number"),
+    )
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     roadmap_id = Column(String(36), ForeignKey("roadmaps.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -225,9 +228,18 @@ class NoteReport(Base):
     status = Column(String(50), default="pending")  # pending, reviewed, dismissed, removed
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    __table_args__ = (
+        # One report per account per note; repeated reports cannot inflate the quarantine count.
+        UniqueConstraint("reporter_id", "note_id", name="uq_note_report_reporter_note"),
+    )
+
 
 class Assessment(Base):
     __tablename__ = "assessments"
+    __table_args__ = (
+        # One quiz per lesson. Concurrent generation relies on this (ON CONFLICT DO NOTHING).
+        UniqueConstraint("lesson_id", name="uq_assessment_lesson"),
+    )
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     lesson_id = Column(String(36), ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -262,9 +274,21 @@ class CycleRun(Base):
     step_inputs = Column(JSONB, default=dict)
     step_outputs = Column(JSONB, default=dict)
     error_message = Column(Text, nullable=True)
-    idempotency_key = Column(String(100), unique=True, nullable=True, index=True)
+    idempotency_key = Column(String(100), nullable=True, index=True)  # unique per user, see __table_args__
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        # Keys are scoped to a user, so two users may send the same key.
+        UniqueConstraint("user_id", "idempotency_key", name="uq_cycle_user_idempotency"),
+        # At most one active cycle per user and lesson (guards concurrent /cycle/start calls).
+        Index(
+            "uq_cycle_active_user_lesson",
+            "user_id", "lesson_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'running', 'paused')"),
+        ),
+    )
 
 
 class StudySchedule(Base):

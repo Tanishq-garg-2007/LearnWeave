@@ -7,6 +7,8 @@ from app.db.session import get_db
 from app.db.models import User, Roadmap, RoadmapVersion, Module, Lesson
 from app.schemas.roadmaps import RoadmapDetailResponse, RescheduleLessonRequest
 from app.api.deps import get_current_user
+from app.services.lesson_status import set_lesson_status
+from app.services.errors import StepError
 
 router = APIRouter(prefix="/roadmaps", tags=["Roadmaps"])
 
@@ -96,9 +98,10 @@ async def update_lesson_status(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lesson not found or access denied")
 
     if req.new_status:
-        if req.new_status not in ("pending", "in_progress", "completed", "skipped"):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid lesson status")
-        lesson.status = req.new_status
+        try:
+            await set_lesson_status(db, user.id, lesson, req.new_status)
+        except StepError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     await db.commit()
     return {"status": "success", "lesson_id": lesson.id, "current_status": lesson.status}

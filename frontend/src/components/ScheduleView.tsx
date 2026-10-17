@@ -204,7 +204,7 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({ roadmap }) => {
                   <div className="pt-3 border-t border-slate-800/60 flex items-center justify-between">
                     <span className="text-xs text-slate-400 flex items-center gap-1">
                       <Clock className="w-3 h-3 text-slate-500" />
-                      {item.estimated_minutes} min
+                      {item.estimated_minutes > 0 ? `${item.estimated_minutes} min` : "Scheduled"}
                     </span>
 
                     <button

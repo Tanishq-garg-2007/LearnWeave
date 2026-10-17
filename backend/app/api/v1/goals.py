@@ -1,21 +1,26 @@
-from datetime import datetime, timedelta
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from app.db.session import get_db
-from app.db.models import (
-    User, LearningGoal, Roadmap, RoadmapVersion, Module, Lesson, LessonPrerequisite, StudySchedule
-)
+from app.db.models import User, LearningGoal, Roadmap, RoadmapVersion, Module, Lesson, LessonPrerequisite
 from app.schemas.roadmaps import GoalCreateRequest, GoalResponse, RoadmapDetailResponse
 from app.api.deps import get_current_user
-from app.services.roadmap_agent import roadmap_agent
+from app.services.roadmap_agent import roadmap_agent, RoadmapValidationError
+from app.services.groq_client import GroqClientError
+from app.api.error_utils import internal_error
+import logging
+
+logger = logging.getLogger("learnweave.api.goals")
+from app.services.scheduler_service import scheduler_service
+
+from app.api.rate_limit import limit_by_ip, limit_by_user
 
 router = APIRouter(prefix="/goals", tags=["Learning Goals & Roadmaps"])
 
 
-@router.post("", response_model=RoadmapDetailResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=RoadmapDetailResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(limit_by_user('goal_create', 5, 60, llm=True))])
 async def create_goal_and_roadmap(
     req: GoalCreateRequest,
     user: User = Depends(get_current_user),
@@ -23,7 +28,7 @@ async def create_goal_and_roadmap(
 ):
     """
     Create a learning goal and generate a structured, personalized curriculum.
-    Persists roadmap, modules, detailed 2-week lessons, future placeholders, and study schedule.
+    Persists roadmap, modules, lessons, and the study schedule for the new active roadmap.
     """
     # 1. Persist Learning Goal
     goal = LearningGoal(
@@ -41,15 +46,21 @@ async def create_goal_and_roadmap(
 
     # 2. Invoke Roadmap Planning Agent
     prefs = user.profile.preferences if user.profile else {}
-    plan = await roadmap_agent.generate_roadmap(req, learner_preferences=prefs)
+    try:
+        plan = await roadmap_agent.generate_roadmap(req, learner_preferences=prefs)
+    except GroqClientError:
+        await db.rollback()
+        raise  # global handler maps to 502/503; previous roadmap untouched
+    except RoadmapValidationError as exc:
+        await db.rollback()
+        raise internal_error(logger, exc, "The AI produced an invalid curriculum. Please try again.", status_code=status.HTTP_502_BAD_GATEWAY)
+    if not plan.modules or not any(m.lessons for m in plan.modules):
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="The AI produced an empty curriculum. Please try again.")
 
     # 3. Deactivate previous active roadmaps
     await db.execute(
-        select(Roadmap).where(Roadmap.user_id == user.id, Roadmap.is_active == True)
-    )
-    from sqlalchemy import update
-    await db.execute(
-        update(Roadmap).where(Roadmap.user_id == user.id, Roadmap.is_active == True).values(is_active=False)
+        update(Roadmap).where(Roadmap.user_id == user.id, Roadmap.is_active.is_(True)).values(is_active=False)
     )
 
     # Persist Roadmap Record
@@ -75,9 +86,7 @@ async def create_goal_and_roadmap(
     db.add(version_snapshot)
 
     # 4. Persist Modules and Lessons
-    lesson_title_to_id = {}
-    schedule_date_cursor = datetime.utcnow() + timedelta(days=1)
-
+    title_to_lesson: dict = {}
     for m_idx, mod_plan in enumerate(plan.modules):
         module = Module(
             roadmap_id=roadmap.id,
@@ -104,18 +113,15 @@ async def create_goal_and_roadmap(
             )
             db.add(lesson)
             await db.flush()
-            lesson_title_to_id[les_plan.title] = lesson.id
+            title_to_lesson[les_plan.title] = lesson.id
+            for pre_title in les_plan.prerequisite_titles:
+                pre_id = title_to_lesson.get(pre_title)
+                if pre_id and pre_id != lesson.id:
+                    db.add(LessonPrerequisite(lesson_id=lesson.id, prerequisite_lesson_id=pre_id))
 
-            # Initial study schedule
-            schedule = StudySchedule(
-                user_id=user.id,
-                lesson_id=lesson.id,
-                scheduled_date=schedule_date_cursor,
-                status="scheduled"
-            )
-            db.add(schedule)
-            schedule_date_cursor += timedelta(days=2)
-
+    # 5. Study schedule: the scheduler honours daily_minutes and only touches the new roadmap.
+    await scheduler_service.drop_pending_sessions_except(db, user_id=user.id, keep_roadmap_id=roadmap.id)
+    await scheduler_service.generate_sprint_schedule(db, user, roadmap.id, commit=False)
     await db.commit()
 
     # Reload complete roadmap with relationships

@@ -1,5 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+import logging
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from app.db.session import get_db
@@ -8,22 +10,26 @@ from app.schemas.auth import (
     UserRegisterRequest, UserLoginRequest, TokenResponse, UserResponse,
     LearnerProfileResponse, UpdatePreferencesRequest
 )
-from app.services.auth_service import hash_password, verify_password, create_access_token
+from app.services.auth_service import hash_password, verify_password, create_access_token, burn_password_check
 from app.api.deps import get_current_user
+
+logger = logging.getLogger("learnweave.api.auth")
+INVALID_CREDENTIALS = "Invalid email or password"
+
+from app.api.rate_limit import limit_by_ip, limit_by_user, check_login_allowed, record_login_failure, clear_login_failures
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(limit_by_ip('register', 10, 3600))])
 async def register(req: UserRegisterRequest, db: AsyncSession = Depends(get_db)):
     """Register a new student account, workspace, and initial learner profile."""
-    # Check duplicate email
-    existing = await db.execute(select(User).where(User.email == req.email))
-    if existing.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="An account with this email already exists"
-        )
+    duplicate_detail = "An account with this email already exists"
+
+    # Emails are normalized to lowercase; the lower() comparison also catches legacy mixed-case rows.
+    existing = await db.execute(select(User.id).where(func.lower(User.email) == req.email))
+    if existing.first() is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=duplicate_detail)
 
     # Atomic user + workspace + profile creation
     user = User(
@@ -32,7 +38,12 @@ async def register(req: UserRegisterRequest, db: AsyncSession = Depends(get_db))
         full_name=req.full_name
     )
     db.add(user)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        # Lost a race with a concurrent registration for the same email.
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=duplicate_detail)
 
     workspace = Workspace(user_id=user.id, name=f"{req.email}'s Workspace")
     db.add(workspace)
@@ -47,7 +58,11 @@ async def register(req: UserRegisterRequest, db: AsyncSession = Depends(get_db))
         }
     )
     db.add(profile)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=duplicate_detail)
     await db.refresh(workspace)
 
     token = create_access_token(data={"sub": user.id, "email": user.email})
@@ -60,20 +75,30 @@ async def register(req: UserRegisterRequest, db: AsyncSession = Depends(get_db))
     )
 
 
-@router.post("/login", response_model=TokenResponse)
-async def login(req: UserLoginRequest, db: AsyncSession = Depends(get_db)):
+@router.post("/login", response_model=TokenResponse, dependencies=[Depends(limit_by_ip('login', 30, 60))])
+async def login(req: UserLoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """Authenticate student credentials and return access token."""
+    check_login_allowed(req.email, request)
     res = await db.execute(
-        select(User).options(selectinload(User.workspaces)).where(User.email == req.email)
+        select(User).options(selectinload(User.workspaces)).where(func.lower(User.email) == req.email)
     )
     user = res.scalar_one_or_none()
-    if not user or not verify_password(req.password, user.hashed_password):
+    if user is None:
+        burn_password_check(req.password)
+        password_ok = False
+    else:
+        password_ok = verify_password(req.password, user.hashed_password)
+
+    # Same response for unknown email, wrong password and deactivated account.
+    if user is None or not password_ok or not user.is_active:
+        record_login_failure(req.email, request)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
+            detail=INVALID_CREDENTIALS,
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    clear_login_failures(req.email, request)
     workspace_id = user.workspaces[0].id if user.workspaces else ""
     token = create_access_token(data={"sub": user.id, "email": user.email})
     return TokenResponse(

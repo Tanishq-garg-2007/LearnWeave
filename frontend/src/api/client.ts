@@ -71,41 +71,80 @@ export function clearAuthToken(): void {
   localStorage.removeItem("learnweave_token");
 }
 
-async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const token = getAuthToken();
-  const headers: Record<string, string> = {
-    ...(options.headers as Record<string, string> || {}),
-  };
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
 
-  if (!(options.body instanceof FormData)) {
+export const UNAUTHORIZED_EVENT = "learnweave:unauthorized";
+const DEFAULT_TIMEOUT_MS = 30_000;
+export const LLM_TIMEOUT_MS = 150_000;
+
+/** FastAPI errors: `detail` is a string, or an array of {loc, msg} for 422 validation errors. */
+export function formatApiDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((d: any) => {
+        if (typeof d === "string") return d;
+        const field = Array.isArray(d?.loc) ? d.loc.filter((x: any) => x !== "body" && x !== "query").join(".") : "";
+        const msg = d?.msg ?? "invalid value";
+        return field ? `${field}: ${msg}` : msg;
+      })
+      .filter(Boolean);
+    if (parts.length) return parts.join("; ");
+  }
+  return fallback;
+}
+
+async function rawRequest(endpoint: string, options: RequestInit & { timeoutMs?: number; auth?: boolean } = {}): Promise<Response> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, auth = true, ...init } = options;
+  const token = getAuthToken();
+  const headers: Record<string, string> = { ...((init.headers as Record<string, string>) || {}) };
+
+  if (init.body && !(init.body instanceof FormData) && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
+  if (token && auth) headers["Authorization"] = `Bearer ${token}`;
 
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${endpoint}`, { ...init, headers, signal: controller.signal });
+  } catch (err: any) {
+    if (err?.name === "AbortError") throw new ApiError("The request timed out. Please try again.", 0);
+    throw new ApiError("Network error. Check your connection and try again.", 0);
+  } finally {
+    clearTimeout(timer);
   }
-
-  const res = await fetch(`${API_BASE}${endpoint}`, {
-    ...options,
-    headers,
-  });
 
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(errorData.detail || `Request failed with status ${res.status}`);
+    const message = formatApiDetail(errorData?.detail, `Request failed with status ${res.status}`);
+    // An expired or invalid token on an authenticated call ends the session (not login/register failures).
+    if (res.status === 401 && token && auth && !endpoint.startsWith("/auth/login") && !endpoint.startsWith("/auth/register")) {
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
+    throw new ApiError(message, res.status);
   }
+  return res;
+}
 
-  if (res.headers.get("content-type")?.includes("audio/")) {
-    return (await res.blob()) as unknown as T;
-  }
-
+async function request<T>(endpoint: string, options: RequestInit & { timeoutMs?: number; auth?: boolean } = {}): Promise<T> {
+  const res = await rawRequest(endpoint, options);
+  if (res.status === 204) return undefined as unknown as T;
   return res.json();
 }
 
 export interface NoteChunk {
   id: string;
   chunk_index: number;
-  content: string;
+  content: string; // backend: text_content
 }
 
 export interface NoteItem {
@@ -113,7 +152,9 @@ export interface NoteItem {
   title: string;
   file_type: string;
   chunk_count: number;
-  is_public: boolean;
+  is_public: boolean; // derived from backend `visibility`
+  visibility?: string;
+  subject?: string;
   upvotes: number;
   downvotes: number;
   wilson_score: number;
@@ -138,6 +179,65 @@ export interface ScheduleItem {
   estimated_minutes: number;
   session_type: "standard_lesson" | "spaced_repetition";
   status: "pending" | "completed" | "skipped";
+}
+
+
+// ---- Backend -> UI normalizers (the backend contract is the source of truth) ----
+function normalizeNote(n: any): NoteItem {
+  return {
+    ...n,
+    is_public: n.visibility === "public",
+    chunk_count: n.chunk_count ?? n.chunks?.length ?? 0,
+    upvotes: n.upvotes ?? 0,
+    downvotes: n.downvotes ?? 0,
+    wilson_score: n.wilson_score ?? 0,
+    chunks: Array.isArray(n.chunks)
+      ? n.chunks.map((c: any) => ({ id: c.id, chunk_index: c.chunk_index, content: c.text_content ?? c.content ?? "" }))
+      : undefined,
+  };
+}
+
+function normalizeLessonContent(c: any) {
+  if (!c || !Array.isArray(c.sections)) return null;
+  return {
+    ...c,
+    sections: c.sections.map((sec: any) => ({
+      title: sec.heading ?? sec.title ?? "",
+      explanation: sec.content ?? sec.explanation ?? "",
+      cited_chunk_ids: sec.cited_chunk_ids ?? [],
+    })),
+    key_takeaways: c.key_takeaways ?? [],
+  };
+}
+
+function normalizeQuiz(q: any) {
+  return {
+    quiz_id: q.assessment_id,
+    lesson_id: q.lesson_id,
+    title: q.title,
+    questions: (q.questions || []).map((x: any) => ({
+      id: String(x.question_index),
+      question_index: x.question_index,
+      question_type: x.question_type,
+      prompt: x.question,
+      // backend sends {"A": "...", "B": "..."}; the UI renders an ordered array
+      options: x.options ? Object.keys(x.options).sort().map((k) => x.options[k]) : undefined,
+      option_keys: x.options ? Object.keys(x.options).sort() : undefined,
+      rubric_criteria: x.rubric_criteria,
+    })),
+  };
+}
+
+function normalizeSession(s: any): ScheduleItem {
+  return {
+    id: s.id,
+    lesson_id: s.lesson_id,
+    lesson_title: s.lesson_title,
+    scheduled_date: s.scheduled_date,
+    estimated_minutes: s.duration_minutes ?? 0,
+    session_type: s.is_revision ? "spaced_repetition" : "standard_lesson",
+    status: s.status === "completed" || s.status === "skipped" ? s.status : "pending",
+  };
 }
 
 export const api = {
@@ -185,19 +285,18 @@ export const api = {
     }),
 
   // Notes
-  listNotes: () => request<NoteItem[]>("/notes"),
+  listNotes: async () => (await request<any[]>("/notes")).map(normalizeNote),
 
-  uploadNote: (file: File, isPublic = false) => {
+  uploadNote: async (file: File, isPublic = false, subject = "General") => {
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("is_public", String(isPublic));
-    return request<NoteItem>("/notes/upload", {
-      method: "POST",
-      body: formData,
-    });
+    formData.append("subject", subject.trim() || "General");
+    formData.append("visibility", isPublic ? "public" : "private");
+    const res = await request<any>("/notes/upload", { method: "POST", body: formData, timeoutMs: LLM_TIMEOUT_MS });
+    return { ...res, chunk_count: res.chunks_created ?? 0 };
   },
 
-  getNoteById: (noteId: string) => request<NoteItem>(`/notes/${noteId}`),
+  getNoteById: async (noteId: string) => normalizeNote(await request<any>(`/notes/${noteId}`)),
 
   deleteNote: (noteId: string) =>
     request<{ status: string; message: string }>(`/notes/${noteId}`, {
@@ -205,30 +304,39 @@ export const api = {
     }),
 
   // Lessons & Learning
-  generateLesson: (lessonId: string, style = "comprehensive") =>
-    request<any>(`/lessons/${lessonId}/generate`, {
-      method: "POST",
-      body: JSON.stringify({ style }),
-    }),
+  generateLesson: async (lessonId: string) => {
+    const res = await request<any>(`/lessons/${lessonId}/generate`, { method: "POST", timeoutMs: LLM_TIMEOUT_MS });
+    return { ...res, content: normalizeLessonContent(res.content) };
+  },
 
-  getLesson: (lessonId: string) => request<any>(`/lessons/${lessonId}`),
+  getLesson: async (lessonId: string) => {
+    const res = await request<any>(`/lessons/${lessonId}`);
+    return { ...res, content: normalizeLessonContent(res.lesson_content) };
+  },
 
   askDoubt: (lessonId: string, doubt: string) =>
-    request<any>(`/lessons/${lessonId}/doubts`, {
+    request<{ answer: string; [k: string]: any }>(`/lessons/${lessonId}/doubt`, {
       method: "POST",
       body: JSON.stringify({ doubt }),
+      timeoutMs: LLM_TIMEOUT_MS,
     }),
 
-  generateQuiz: (lessonId: string) =>
-    request<any>(`/lessons/${lessonId}/quiz`, {
-      method: "POST",
-    }),
+  generateQuiz: async (lessonId: string) =>
+    normalizeQuiz(await request<any>(`/lessons/${lessonId}/quiz`, { method: "POST", timeoutMs: LLM_TIMEOUT_MS })),
 
-  submitQuiz: (quizId: string, answers: Array<{ question_id: string; answer_text: string }>) =>
-    request<any>(`/lessons/quiz/${quizId}/submit`, {
+  /** answers use the normalized quiz shape: question_index + a letter (MCQ) or free text (short answer). */
+  submitQuiz: async (
+    lessonId: string,
+    assessmentId: string,
+    answers: Array<{ question_index: number; selected_option?: string; written_answer?: string }>
+  ) => {
+    const res = await request<any>(`/lessons/${lessonId}/quiz/submit`, {
       method: "POST",
-      body: JSON.stringify({ answers }),
-    }),
+      body: JSON.stringify({ assessment_id: assessmentId, answers }),
+      timeoutMs: LLM_TIMEOUT_MS,
+    });
+    return { ...res, score_percentage: Math.round((res.overall_score ?? 0) * 100) };
+  },
 
   // Learning Cycle State Machine
   startCycle: (lessonId: string) =>
@@ -237,102 +345,89 @@ export const api = {
       body: JSON.stringify({ lesson_id: lessonId }),
     }),
 
-  getCycleState: (cycleId: string) => request<CycleStateResponse>(`/cycle/${cycleId}/state`),
+  getCycleState: (cycleId: string) => request<CycleStateResponse>(`/cycle/${cycleId}`),
 
-  submitCycleStep: (cycleId: string, stepName: string, payload: any) =>
+  submitCycleStep: (cycleId: string, stepName: string, inputData: any) =>
     request<CycleStateResponse>(`/cycle/${cycleId}/step`, {
       method: "POST",
-      body: JSON.stringify({ step_name: stepName, payload }),
+      body: JSON.stringify({ step_name: stepName, input_data: inputData }),
+      timeoutMs: LLM_TIMEOUT_MS,
     }),
 
   // Voice Pipeline
   speak: async (text: string, voice = "af_heart"): Promise<Blob> => {
-    const token = getAuthToken();
-    const res = await fetch(`${API_BASE}/voice/speak`, {
+    const res = await rawRequest("/voice/speak", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ text, voice }),
+      body: JSON.stringify({ text: text.slice(0, 5000), voice }),
+      timeoutMs: LLM_TIMEOUT_MS,
     });
-    if (!res.ok) throw new Error("TTS synthesis failed");
     return res.blob();
   },
 
+  /** Sends the recorder's real container type; the backend returns {text}. */
   listen: async (audioBlob: Blob): Promise<{ transcription: string }> => {
-    const token = getAuthToken();
+    const type = audioBlob.type || "audio/webm";
+    const ext = type.includes("mp4") ? "mp4" : type.includes("ogg") ? "ogg" : type.includes("wav") ? "wav" : "webm";
     const formData = new FormData();
-    formData.append("file", audioBlob, "audio.wav");
-    const res = await fetch(`${API_BASE}/voice/listen`, {
-      method: "POST",
-      headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: formData,
-    });
-    if (!res.ok) throw new Error("STT transcription failed");
-    return res.json();
+    formData.append("file", audioBlob, `audio.${ext}`);
+    const res = await request<{ text: string }>("/voice/listen", { method: "POST", body: formData, timeoutMs: LLM_TIMEOUT_MS });
+    return { transcription: res.text ?? "" };
   },
 
   // Schedules
-  getSchedule: (roadmapId: string) => request<ScheduleItem[]>(`/schedule/${roadmapId}`),
+  getSchedule: async (roadmapId: string): Promise<ScheduleItem[]> => {
+    const res = await request<{ sessions: any[] }>(`/schedule?roadmap_id=${encodeURIComponent(roadmapId)}`);
+    return (res.sessions || []).map(normalizeSession);
+  },
 
-  generateSchedule: (roadmapId: string, startDate?: string) =>
-    request<ScheduleItem[]>("/schedule/generate", {
-      method: "POST",
-      body: JSON.stringify({ roadmap_id: roadmapId, start_date: startDate }),
-    }),
+  /** Regenerates, then reloads: the generate endpoint returns a summary, not the sessions. */
+  generateSchedule: async (roadmapId: string): Promise<ScheduleItem[]> => {
+    await request("/schedule/generate", { method: "POST", body: JSON.stringify({ roadmap_id: roadmapId }) });
+    return api.getSchedule(roadmapId);
+  },
 
-  completeScheduleSession: (scheduleId: string) =>
-    request<ScheduleItem>(`/schedule/${scheduleId}/complete`, {
-      method: "PUT",
-    }),
+  completeScheduleSession: async (scheduleId: string): Promise<ScheduleItem> =>
+    normalizeSession(
+      await request<any>(`/schedule/${scheduleId}/status`, { method: "PUT", body: JSON.stringify({ status: "completed" }) })
+    ),
 
   // Community Library
-  getCommunityNotes: async (sort: "wilson" | "recent" = "wilson", search?: string): Promise<NoteItem[]> => {
+  getCommunityNotes: async (sort: "wilson" | "latest" | "upvotes" = "wilson", search?: string): Promise<NoteItem[]> => {
     const params = new URLSearchParams({ sort_by: sort });
     if (search) params.append("query", search);
     const res = await request<any>(`/community/notes?${params.toString()}`);
-    return (Array.isArray(res) ? res : res.notes || []) as NoteItem[];
+    return (Array.isArray(res) ? res : res.notes || []).map(normalizeNote);
   },
 
   voteCommunityNote: (noteId: string, voteType: "upvote" | "downvote") =>
-    request<{ status: string; new_wilson_score: number; upvotes: number; downvotes: number }>(
+    request<{ upvotes: number; downvotes: number; wilson_score: number; new_wilson_score: number }>(
       `/community/notes/${noteId}/vote`,
-      {
-        method: "POST",
-        body: JSON.stringify({ vote_type: voteType }),
-      }
+      { method: "POST", body: JSON.stringify({ vote_value: voteType === "upvote" ? 1 : -1 }) }
     ),
 
   importCommunityNote: (noteId: string) =>
     request<{ status: string; new_note_id: string; title: string; chunks_imported: number }>(
       `/community/notes/${noteId}/import`,
-      {
-        method: "POST",
-      }
+      { method: "POST", timeoutMs: LLM_TIMEOUT_MS }
     ),
 
-  reportCommunityNote: (noteId: string, reason = "Inappropriate or inaccurate content") =>
-    request<{ status: string; report_count: number; is_quarantined: boolean }>(
+  reportCommunityNote: async (noteId: string, reason = "Inappropriate or inaccurate content") => {
+    const res = await request<{ total_reports: number; quarantined: boolean; message: string }>(
       `/community/notes/${noteId}/report`,
-      {
-        method: "POST",
-        body: JSON.stringify({ reason }),
-      }
-    ),
+      { method: "POST", body: JSON.stringify({ reason }) }
+    );
+    return { ...res, report_count: res.total_reports, is_quarantined: res.quarantined };
+  },
 
-  publishNote: (noteId: string, isPublic: boolean) =>
-    request<{ status: string; note_id: string; is_public: boolean }>(
-      `/community/notes/${noteId}/publish`,
-      {
-        method: "PUT",
-        body: JSON.stringify({ is_public: isPublic }),
-      }
-    ),
+  publishNote: async (noteId: string, isPublic: boolean) => {
+    const res = await request<{ id: string; visibility: string }>(`/community/notes/${noteId}/publish`, {
+      method: "PUT",
+      body: JSON.stringify({ visibility: isPublic ? "public" : "private" }),
+    });
+    return { ...res, is_public: res.visibility === "public" };
+  },
 
   // Health
-  checkHealth: () => request<{ status: string }>("/health"),
+  checkHealth: () => request<{ status: string }>("/health", { auth: false }),
   checkReadiness: () => request<{ status: string; checks: Record<string, boolean> }>("/ready"),
 };
