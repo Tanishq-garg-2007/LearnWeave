@@ -128,13 +128,15 @@ export const LearningCycleModal: React.FC<LearningCycleModalProps> = ({
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
       audioChunksRef.current = [];
+      const stopTracks = () => stream.getTracks().forEach((t) => t.stop());
 
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
 
       recorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/wav" });
+        stopTracks(); // release the microphone (and the browser's recording indicator)
+        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
         setIsAskingDoubt(true);
         try {
           const res = await api.listen(audioBlob);
@@ -182,16 +184,17 @@ export const LearningCycleModal: React.FC<LearningCycleModalProps> = ({
     setIsSubmittingQuiz(true);
     setError(null);
 
-    const answersPayload = quizData.questions.map((q: any) => ({
-      question_id: q.id,
-      answer_text: q.question_type === "mcq" ? mcqAnswers[q.id] || "" : shortAnswer,
-    }));
+    const answersPayload = quizData.questions.map((q: any) =>
+      q.question_type === "mcq"
+        ? { question_index: q.question_index, selected_option: mcqAnswers[q.id] || undefined }
+        : { question_index: q.question_index, written_answer: shortAnswer.slice(0, 2000) }
+    );
 
     try {
-      const result = await api.submitQuiz(quizData.quiz_id, answersPayload);
+      const result = await api.submitQuiz(lesson!.id, quizData.quiz_id, answersPayload);
       setEvalResult(result);
       setActiveStep("eval");
-      onLessonCompleted();
+      if (result.passed) onLessonCompleted();
     } catch (err: any) {
       setError(err.message || "Failed to evaluate quiz");
     } finally {
@@ -338,6 +341,17 @@ export const LearningCycleModal: React.FC<LearningCycleModalProps> = ({
                 </div>
               ))}
 
+              {lessonData?.content?.key_takeaways?.length > 0 && (
+                <div className="p-3 rounded-lg bg-slate-900 border border-slate-800/80 space-y-1">
+                  <span className="text-[10px] font-bold text-indigo-400 uppercase">Key Takeaways</span>
+                  <ul className="list-disc list-inside text-xs text-slate-400 space-y-0.5">
+                    {lessonData.content.key_takeaways.map((item: string, i: number) => (
+                      <li key={i}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               <div className="pt-4 border-t border-slate-800 flex justify-end gap-3">
                 <button
                   type="button"
@@ -473,7 +487,7 @@ export const LearningCycleModal: React.FC<LearningCycleModalProps> = ({
                   {q.question_type === "mcq" && q.options ? (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                       {q.options.map((opt: string, i: number) => {
-                        const letter = ["A", "B", "C", "D"][i];
+                        const letter = q.option_keys?.[i] ?? ["A", "B", "C", "D"][i];
                         const isSelected = mcqAnswers[q.id] === letter;
                         return (
                           <button
@@ -547,12 +561,14 @@ export const LearningCycleModal: React.FC<LearningCycleModalProps> = ({
                     <p className="text-xs text-slate-400 mt-1">
                       {evalResult.passed
                         ? "Great job! Topic mastery updated in your persistent learner profile."
-                        : "Score below 70% threshold. Adaptive replanning has been triggered."}
+                        : evalResult.adaptation?.action === "remedial_inserted" || evalResult.adaptation?.action === "remedial_exists"
+                        ? "Score below the pass threshold. A targeted revision lesson is in your roadmap."
+                        : "Score below the pass threshold. Review the lesson and try again."}
                     </p>
                   </div>
 
                   {/* Remedial Lesson Alert if < 70% */}
-                  {!evalResult.passed && (
+                  {!evalResult.passed && (evalResult.adaptation?.action === "remedial_inserted" || evalResult.adaptation?.action === "remedial_exists") && (
                     <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3">
                       <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
                       <div>

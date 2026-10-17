@@ -1,8 +1,12 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+import logging
 from app.db.session import get_db
 from app.config import settings
+from app.api.error_utils import new_error_reference
+
+logger = logging.getLogger("learnweave.health")
 
 router = APIRouter(tags=["Health"])
 
@@ -38,10 +42,12 @@ async def readiness(db: AsyncSession = Depends(get_db)):
         if row is not None:
             checks["pgvector"] = True
     except Exception as exc:
+        ref = new_error_reference()
+        logger.error(f"[ref={ref}] Readiness check failed: {exc!r}")
         return {
             "status": "degraded",
             "checks": checks,
-            "error": str(exc)
+            "error": f"Readiness check failed (reference: {ref})"
         }
 
     all_ready = checks["database"] and checks["pgvector"]

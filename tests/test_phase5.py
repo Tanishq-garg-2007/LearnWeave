@@ -180,14 +180,13 @@ async def test_end_to_end_student_lifecycle():
         assert complete_sched.status_code == 200
         assert complete_sched.json()["status"] == "completed"
 
-        # Step 6: Community Sharing & Wilson Scoring
-        vote_res = await client.post(
+        # Step 6: Community Sharing. Owners cannot vote on their own notes.
+        self_vote = await client.post(
             f"/api/v1/community/notes/{note_id_1}/vote",
             json={"vote_value": 1},
             headers=headers_1
         )
-        assert vote_res.status_code == 200
-        assert vote_res.json()["new_wilson_score"] > 0.0
+        assert self_vote.status_code == 400
 
         # Step 7: User 2 Registration & Independent Clone Import
         email_2 = f"bob_{uuid.uuid4().hex[:6]}@example.com"
@@ -198,6 +197,15 @@ async def test_end_to_end_student_lifecycle():
         })
         token_2 = reg_2.json()["access_token"]
         headers_2 = {"Authorization": f"Bearer {token_2}"}
+
+        # Wilson Scoring: another user upvotes User 1's note
+        vote_res = await client.post(
+            f"/api/v1/community/notes/{note_id_1}/vote",
+            json={"vote_value": 1},
+            headers=headers_2
+        )
+        assert vote_res.status_code == 200
+        assert vote_res.json()["new_wilson_score"] > 0.0
 
         # User 2 imports User 1's note
         import_res = await client.post(

@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import math
+import threading
 from typing import List
 import numpy as np
 from app.config import settings
@@ -16,19 +17,28 @@ class EmbeddingService:
         self.dimension = settings.EMBEDDING_DIMENSION  # 384
         self._model = None
         self._initialized = False
+        # Uploads embed in worker threads, so the one-time model load must not run twice.
+        self._load_lock = threading.Lock()
 
     def _get_model(self):
-        if not self._initialized:
-            try:
-                from fastembed import TextEmbedding
-                self._model = TextEmbedding(model_name=self.model_name)
+        # Double-checked locking: once the load has finished, callers take no lock.
+        if self._initialized:
+            return self._model
+        with self._load_lock:
+            if not self._initialized:
+                try:
+                    from fastembed import TextEmbedding
+                    self._model = TextEmbedding(model_name=self.model_name)
+                    logger.info(f"Loaded local embedding model: {self.model_name} (dim={self.dimension})")
+                except Exception as exc:
+                    logger.warning(f"Could not load fastembed: {exc}. Using deterministic semantic projection.")
+                    self._model = None
                 self._initialized = True
-                logger.info(f"Loaded local embedding model: {self.model_name} (dim={self.dimension})")
-            except Exception as exc:
-                logger.warning(f"Could not load fastembed: {exc}. Using deterministic semantic projection.")
-                self._initialized = True
-                self._model = None
         return self._model
+
+    def warm_up(self) -> bool:
+        """Load the model if it is not loaded yet. The first load can take seconds, so call this from a worker thread."""
+        return self._get_model() is not None
 
     def embed_text(self, text: str) -> List[float]:
         """Compute 384-dimensional embedding vector for a single query or chunk."""

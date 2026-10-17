@@ -1,13 +1,22 @@
 import logging
-from typing import Dict, Any, List
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
-from app.db.models import Lesson, Assessment, User
+from pydantic import BeforeValidator, Field, StringConstraints, TypeAdapter, field_validator, BaseModel
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models import Assessment, AssessmentAttempt, User
+from app.services.errors import NotFoundError, StepError
+from app.services.ownership import get_owned_lesson
 from app.services.groq_client import groq_client
-from app.schemas.lessons import QuizResponse, QuizQuestionItem
+from app.schemas.lessons import QuizQuestionItem, QuizResponse
 
 logger = logging.getLogger("learnweave.quiz_agent")
+
+QUIZ_QUESTION_COUNT = 4
+MCQ_COUNT = 3  # questions 0..2 are MCQs, question 3 is short answer
+OPTION_KEYS = ("A", "B", "C", "D")
 
 QUIZ_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -47,31 +56,200 @@ QUIZ_SCHEMA: Dict[str, Any] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Strict question schema. Model output is validated, never repaired with defaults:
+# a missing option, a null answer key or a malformed rubric rejects the whole quiz.
+# ---------------------------------------------------------------------------
+
+def _strip_upper(value: Any) -> Any:
+    return value.strip().upper() if isinstance(value, str) else value
+
+
+def _normalise_option_keys(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k).strip().upper(): v for k, v in value.items()}
+    return value
+
+
+StemText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=1000)]
+ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
+CorrectLetter = Annotated[Literal["A", "B", "C", "D"], BeforeValidator(_strip_upper)]
+
+
+class McqQuestion(BaseModel):
+    question_index: int
+    question_type: Literal["mcq"]
+    question: StemText
+    options: Annotated[Dict[Literal["A", "B", "C", "D"], ShortText], BeforeValidator(_normalise_option_keys)]
+    correct_answer: CorrectLetter
+    explanation: Annotated[str, StringConstraints(strip_whitespace=True, max_length=600)] = ""
+
+    @field_validator("options")
+    @classmethod
+    def _exactly_four_options(cls, value: Dict[str, str]) -> Dict[str, str]:
+        if set(value) != set(OPTION_KEYS):
+            raise ValueError("options must contain exactly A, B, C and D")
+        return value
+
+
+class ShortAnswerQuestion(BaseModel):
+    question_index: int
+    question_type: Literal["short_answer"]
+    question: StemText
+    ideal_answer: Annotated[str, StringConstraints(strip_whitespace=True, min_length=10, max_length=1500)]
+    rubric_criteria: Annotated[List[ShortText], Field(min_length=1, max_length=5)]
+
+
+QuizQuestion = Annotated[Union[McqQuestion, ShortAnswerQuestion], Field(discriminator="question_type")]
+_QUESTION_ADAPTER: TypeAdapter = TypeAdapter(QuizQuestion)
+
+
+def validate_quiz_questions(raw: Any) -> List[Dict[str, Any]]:
+    """Return the normalised stored form of a quiz, or raise ValueError.
+
+    Question indexes are taken from position, and question types must follow the fixed layout
+    (three MCQs, then one short answer).
+    """
+    if not isinstance(raw, list) or len(raw) != QUIZ_QUESTION_COUNT:
+        raise ValueError(f"a quiz needs exactly {QUIZ_QUESTION_COUNT} questions")
+    normalised: List[Dict[str, Any]] = []
+    for position, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"question {position} is not an object")
+        question = _QUESTION_ADAPTER.validate_python({**item, "question_index": position})
+        expected = "mcq" if position < MCQ_COUNT else "short_answer"
+        if question.question_type != expected:
+            raise ValueError(f"question {position} must be {expected}")
+        normalised.append(question.model_dump())
+    return normalised
+
+
+def build_quiz_response(assessment: Assessment) -> QuizResponse:
+    """Student-facing view of a quiz. Answer keys and ideal answers are never included."""
+    try:
+        questions = validate_quiz_questions(assessment.questions)
+    except ValueError as exc:
+        logger.error(f"Stored quiz {assessment.id} failed validation: {exc}")
+        raise StepError("This quiz is damaged and must be regenerated.", status_code=409)
+    items = [
+        QuizQuestionItem(
+            question_index=q["question_index"],
+            question_type=q["question_type"],
+            question=q["question"],
+            options=q.get("options"),
+            rubric_criteria=q.get("rubric_criteria"),
+        )
+        for q in questions
+    ]
+    return QuizResponse(
+        assessment_id=assessment.id,
+        lesson_id=assessment.lesson_id,
+        title=assessment.title,
+        questions=items,
+    )
+
+
+class QuizGenerationError(Exception):
+    """The model returned output that is not a valid quiz. Nothing has been stored."""
+
+
 class QuizAgent:
     """
     Generates formative assessments consisting of:
     - 3 Multiple Choice Questions (MCQs) for concept recognition and discrimination.
     - 1 Short Answer conceptual question for deep comprehension.
+
+    Generation (POST /lessons/{id}/quiz) is idempotent: one quiz per lesson, enforced by a unique
+    constraint. Reads (GET /lessons/{id}/quiz) never call the LLM.
     """
 
-    async def generate_quiz(
-        self,
-        db: AsyncSession,
-        lesson_id: str,
-        user: User
-    ) -> Assessment:
-        # Check if assessment already exists for this lesson
-        res = await db.execute(select(Assessment).where(Assessment.lesson_id == lesson_id))
-        existing = res.scalars().first()
-        if existing:
+    async def get_current_assessment(self, db: AsyncSession, lesson_id: str, user: User) -> Assessment:
+        """Read-only lookup. NotFoundError if the lesson is not the user's or no quiz exists yet."""
+        lesson = await get_owned_lesson(db, lesson_id, user)
+        assessment = await self._find_assessment(db, lesson.id)
+        if assessment is None:
+            raise NotFoundError("Quiz has not been generated yet")
+        return assessment
+
+    async def generate_quiz(self, db: AsyncSession, lesson_id: str, user: User) -> Assessment:
+        lesson = await get_owned_lesson(db, lesson_id, user)
+
+        existing = await self._find_assessment(db, lesson.id)
+        if existing is not None:
+            try:
+                validate_quiz_questions(existing.questions)
+                return existing
+            except ValueError as exc:
+                logger.warning(f"Quiz {existing.id} is invalid ({exc}); regenerating in place.")
+                attempts = await db.scalar(
+                    select(func.count(AssessmentAttempt.id)).where(AssessmentAttempt.assessment_id == existing.id)
+                )
+                if attempts:
+                    # Attempts were graded against this quiz, so its questions must not change under them.
+                    raise StepError("This quiz is damaged and already has attempts. Contact support.", status_code=409)
+
+        questions = await self._generate_questions(lesson)
+
+        if existing is not None:
+            existing.questions = questions
+            existing.title = f"Quiz: {lesson.title}"
+            await db.commit()
+            await db.refresh(existing)
             return existing
 
-        # Load lesson
-        l_res = await db.execute(select(Lesson).where(Lesson.id == lesson_id))
-        lesson = l_res.scalar_one_or_none()
-        if not lesson:
-            raise ValueError(f"Lesson {lesson_id} not found")
+        # ON CONFLICT: two concurrent requests for the same lesson both succeed, and exactly one row is stored.
+        stmt = (
+            pg_insert(Assessment)
+            .values(
+                lesson_id=lesson.id,
+                title=f"Quiz: {lesson.title}",
+                assessment_type="quiz",
+                questions=questions,
+            )
+            .on_conflict_do_nothing(index_elements=["lesson_id"])
+        )
+        await db.execute(stmt)
+        await db.commit()
 
+        assessment = await self._find_assessment(db, lesson.id)
+        if assessment is None:  # cannot happen after a successful insert or an existing conflict row
+            raise QuizGenerationError("quiz row missing after insert")
+        return assessment
+
+    async def _find_assessment(self, db: AsyncSession, lesson_id: str) -> Optional[Assessment]:
+        res = await db.execute(
+            select(Assessment)
+            .where(Assessment.lesson_id == lesson_id)
+            .order_by(Assessment.created_at.asc(), Assessment.id.asc())
+            .limit(1)
+        )
+        return res.scalars().first()
+
+    async def _generate_questions(self, lesson) -> List[Dict[str, Any]]:
+        prompt = self._build_prompt(lesson)
+        system_msg = "You are a senior pedagogy and assessment design specialist. Output strictly valid JSON."
+
+        try:
+            raw_data = await groq_client.generate_structured_json(
+                prompt=prompt,
+                schema=QUIZ_SCHEMA,
+                system_message=system_msg,
+                temperature=0.2,
+                max_tokens=850
+            )
+        except Exception as exc:
+            logger.warning(f"Quiz generation via Groq failed: {exc}. Generating deterministic fallback quiz.")
+            return self._generate_fallback_questions(lesson.title)
+
+        raw_questions = raw_data.get("questions") if isinstance(raw_data, dict) else None
+        try:
+            return validate_quiz_questions(raw_questions)
+        except ValueError as exc:
+            logger.warning(f"Model quiz output failed validation: {exc}")
+            raise QuizGenerationError(str(exc)) from exc
+
+    @staticmethod
+    def _build_prompt(lesson) -> str:
         content_context = ""
         if lesson.lesson_content:
             summary = lesson.lesson_content.get("summary", "")
@@ -81,7 +259,7 @@ class QuizAgent:
         else:
             content_context = f"Topic: {lesson.title}. Focus on core foundational principles."
 
-        prompt = f"""Generate a rigorous, formative assessment for the lesson:
+        return f"""Generate a rigorous, formative assessment for the lesson:
 Lesson Title: {lesson.title}
 Content Context:
 {content_context}
@@ -94,72 +272,6 @@ REQUIREMENTS:
    - Question 3: Conceptual Short-Answer Question (question_type="short_answer"). Provide `ideal_answer` and a list of 2-3 `rubric_criteria` (key concepts the student must articulate).
 2. Avoid trivial recall; test analytical understanding and operational trade-offs.
 """
-
-        system_msg = "You are a senior pedagogy and assessment design specialist. Output strictly valid JSON."
-
-        try:
-            raw_data = await groq_client.generate_structured_json(
-                prompt=prompt,
-                schema=QUIZ_SCHEMA,
-                system_message=system_msg,
-                temperature=0.2,
-                max_tokens=850
-            )
-            questions = self._sanitize_questions(raw_data.get("questions", []), lesson.title)
-        except Exception as exc:
-            logger.warning(f"Quiz generation via Groq failed: {exc}. Generating deterministic fallback quiz.")
-            questions = self._generate_fallback_questions(lesson.title)
-
-        assessment = Assessment(
-            lesson_id=lesson.id,
-            title=f"Quiz: {lesson.title}",
-            assessment_type="quiz",
-            questions=questions
-        )
-        db.add(assessment)
-        await db.commit()
-        await db.refresh(assessment)
-        return assessment
-
-    def _sanitize_questions(self, raw_questions: List[Dict[str, Any]], topic: str) -> List[Dict[str, Any]]:
-        sanitized = []
-        for idx, q in enumerate(raw_questions[:4]):
-            q_type = q.get("question_type", "mcq")
-            if idx < 3:
-                # Force first 3 to be mcq
-                q_type = "mcq"
-                opts = q.get("options") or {
-                    "A": "Primary operational principle",
-                    "B": "Secondary redundant mechanism",
-                    "C": "Degraded state recovery",
-                    "D": "Unbounded concurrent execution"
-                }
-                correct = q.get("correct_answer", "A").strip().upper()
-                if correct not in ["A", "B", "C", "D"]:
-                    correct = "A"
-                sanitized.append({
-                    "question_index": idx,
-                    "question_type": "mcq",
-                    "question": q.get("question", f"Which is a central principle of {topic}?"),
-                    "options": opts,
-                    "correct_answer": correct,
-                    "explanation": q.get("explanation", "Standard foundational property.")
-                })
-            else:
-                # 4th is short answer
-                sanitized.append({
-                    "question_index": idx,
-                    "question_type": "short_answer",
-                    "question": q.get("question", f"Explain in your own words the architectural role of {topic}."),
-                    "ideal_answer": q.get("ideal_answer", f"{topic} ensures resource boundaries and coordinated state execution."),
-                    "rubric_criteria": q.get("rubric_criteria", ["Mentions core purpose", "Addresses trade-offs"])
-                })
-
-        # Ensure exactly 4
-        while len(sanitized) < 4:
-            sanitized = self._generate_fallback_questions(topic)
-            break
-        return sanitized
 
     def _generate_fallback_questions(self, topic: str) -> List[Dict[str, Any]]:
         return [

@@ -1,27 +1,52 @@
 import logging
-from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.db.session import get_db
-from app.db.models import User, Lesson, Assessment, AssessmentAttempt
+from app.db.models import User, Assessment, AssessmentAttempt
 from app.api.deps import get_current_user
+from app.api.error_utils import internal_error, new_error_reference
 from app.schemas.lessons import (
-    LessonContent, LessonGenerateResponse, DoubtRequest, DoubtResponse,
-    QuizResponse, QuizQuestionItem, QuizSubmitRequest, QuizSubmitResponse
+    LessonGenerateResponse, DoubtRequest, DoubtResponse,
+    QuizResponse, QuizSubmitRequest, QuizSubmitResponse
 )
+from app.services.errors import NotFoundError, StepError
+from app.services.ownership import get_owned_lesson
 from app.services.lesson_agent import lesson_agent
 from app.services.doubt_agent import doubt_agent
-from app.services.quiz_agent import quiz_agent
+from app.services.quiz_agent import quiz_agent, build_quiz_response, QuizGenerationError
 from app.services.evaluation_agent import evaluation_agent
+from app.services.adaptive_agent import adaptive_agent
 
 logger = logging.getLogger("learnweave.api.lessons")
+from app.api.rate_limit import limit_by_ip, limit_by_user
+
 router = APIRouter(prefix="/lessons", tags=["Lessons & Agentic Learning Cycle"])
 
+RETRY_AFTER = "30"
 
-@router.post("/{lesson_id}/generate", response_model=LessonGenerateResponse)
+
+def _unavailable(exc: BaseException, public_message: str) -> HTTPException:
+    """503 with a reference id and Retry-After. Upstream and driver text stays in the server log."""
+    err = internal_error(logger, exc, public_message, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+    err.headers = {"Retry-After": RETRY_AFTER}
+    return err
+
+
+def _from_step_error(exc: StepError) -> HTTPException:
+    if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+        ref = new_error_reference()
+        logger.warning(f"[ref={ref}] {exc}")
+        return HTTPException(
+            status_code=exc.status_code,
+            detail=f"{exc} (reference: {ref})",
+            headers={"Retry-After": RETRY_AFTER},
+        )
+    return HTTPException(status_code=exc.status_code, detail=str(exc))
+
+
+@router.post("/{lesson_id}/generate", response_model=LessonGenerateResponse, dependencies=[Depends(limit_by_user('lesson_generate', 20, 60, llm=True))])
 async def generate_lesson(
     lesson_id: str,
     user: User = Depends(get_current_user),
@@ -32,39 +57,21 @@ async def generate_lesson(
     If student has uploaded relevant notes, uses Mode A (RAG-Grounded).
     If no notes match, uses Mode B (AI-Generated Learning).
     """
-    res = await db.execute(select(Lesson).where(Lesson.id == lesson_id))
-    lesson = res.scalar_one_or_none()
-    if not lesson:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lesson not found")
-
-    # If lesson content is already cached, return it
-    if lesson.lesson_content and "sections" in lesson.lesson_content and lesson.lesson_content.get("sections"):
-        content_dict = lesson.lesson_content
-        content = LessonContent(**content_dict)
-        return LessonGenerateResponse(
-            lesson_id=lesson.id,
-            title=lesson.title,
-            status=lesson.status,
-            grounding_type=content.grounding_type,
-            content=content
-        )
-
-    # Generate lesson content
     try:
-        content = await lesson_agent.generate_lesson(db=db, lesson_id=lesson_id, user=user)
-        return LessonGenerateResponse(
-            lesson_id=lesson.id,
-            title=lesson.title,
-            status=lesson.status,
-            grounding_type=content.grounding_type,
-            content=content
-        )
+        # Returns cached content when present, otherwise generates it. Ownership is enforced.
+        lesson, content, _cached = await lesson_agent.ensure_lesson_content(db=db, lesson_id=lesson_id, user=user)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except Exception as exc:
-        logger.error(f"Lesson generation failed: {exc}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate lesson: {exc}"
-        )
+        raise internal_error(logger, exc, "Failed to generate lesson")
+
+    return LessonGenerateResponse(
+        lesson_id=lesson.id,
+        title=lesson.title,
+        status=lesson.status,
+        grounding_type=content.grounding_type,
+        content=content
+    )
 
 
 @router.get("/{lesson_id}")
@@ -74,12 +81,10 @@ async def get_lesson(
     db: AsyncSession = Depends(get_db)
 ):
     """Retrieve lesson metadata and any cached lesson content."""
-    res = await db.execute(
-        select(Lesson).options(selectinload(Lesson.module)).where(Lesson.id == lesson_id)
-    )
-    lesson = res.scalar_one_or_none()
-    if not lesson:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lesson not found")
+    try:
+        lesson = await get_owned_lesson(db, lesson_id, user, load_module=True)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 
     return {
         "id": lesson.id,
@@ -93,7 +98,7 @@ async def get_lesson(
     }
 
 
-@router.post("/{lesson_id}/doubt", response_model=DoubtResponse)
+@router.post("/{lesson_id}/doubt", response_model=DoubtResponse, dependencies=[Depends(limit_by_user('doubt', 15, 60, llm=True))])
 async def ask_doubt(
     lesson_id: str,
     req: DoubtRequest,
@@ -118,51 +123,52 @@ async def ask_doubt(
             user=user
         )
         return response
-    except ValueError as exc:
+    except NotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except Exception as exc:
-        logger.error(f"Doubt resolution error: {exc}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to resolve doubt")
+        raise internal_error(logger, exc, "Failed to resolve doubt")
 
 
 @router.get("/{lesson_id}/quiz", response_model=QuizResponse)
-async def get_or_generate_quiz(
+async def get_quiz(
     lesson_id: str,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Retrieve or generate formative assessment for the lesson.
-    Sanitizes questions to hide answer keys from student payload.
+    Read the lesson's quiz. Read-only: it never calls the LLM (use POST to generate).
+    Answer keys and ideal answers are never included.
     """
     try:
-        assessment = await quiz_agent.generate_quiz(db=db, lesson_id=lesson_id, user=user)
-    except ValueError as exc:
+        assessment = await quiz_agent.get_current_assessment(db=db, lesson_id=lesson_id, user=user)
+        return build_quiz_response(assessment)
+    except NotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except StepError as exc:
+        raise _from_step_error(exc)
+
+
+@router.post("/{lesson_id}/quiz", response_model=QuizResponse, dependencies=[Depends(limit_by_user('quiz_gen', 10, 60, llm=True))])
+async def create_or_get_quiz(
+    lesson_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate the lesson's quiz if none exists yet, otherwise return the existing one. Idempotent."""
+    try:
+        assessment = await quiz_agent.generate_quiz(db=db, lesson_id=lesson_id, user=user)
+        return build_quiz_response(assessment)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except QuizGenerationError as exc:
+        raise _unavailable(exc, "Quiz generation is temporarily unavailable")
+    except StepError as exc:
+        raise _from_step_error(exc)
     except Exception as exc:
-        logger.error(f"Quiz generation error: {exc}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to prepare quiz")
-
-    # Sanitize questions: strip out correct_answer and ideal_answer
-    sanitized_items = []
-    for q in (assessment.questions or []):
-        sanitized_items.append(QuizQuestionItem(
-            question_index=q["question_index"],
-            question_type=q["question_type"],
-            question=q["question"],
-            options=q.get("options"),
-            rubric_criteria=q.get("rubric_criteria")
-        ))
-
-    return QuizResponse(
-        assessment_id=assessment.id,
-        lesson_id=assessment.lesson_id,
-        title=assessment.title,
-        questions=sanitized_items
-    )
+        raise internal_error(logger, exc, "Failed to prepare quiz")
 
 
-@router.post("/{lesson_id}/quiz/submit", response_model=QuizSubmitResponse)
+@router.post("/{lesson_id}/quiz/submit", response_model=QuizSubmitResponse, dependencies=[Depends(limit_by_user('quiz_submit', 20, 60, llm=True))])
 async def submit_quiz(
     lesson_id: str,
     req: QuizSubmitRequest,
@@ -172,15 +178,19 @@ async def submit_quiz(
     """
     Submit student answers for automated evaluation:
     - Deterministic MCQ scoring in Python.
-    - Rubric-based evaluation for short-answer questions.
+    - Rubric-based evaluation for short-answer questions (503 if the grader is unavailable; nothing is recorded).
     - Mastery tracking and automatic lesson completion if score >= 70%.
+    - A failed attempt triggers adaptive replanning; its result is returned in `adaptation`.
     """
-    res = await db.execute(select(Assessment).where(Assessment.lesson_id == lesson_id))
-    assessment = res.scalars().first()
-    if not assessment:
+    try:
+        assessment = await quiz_agent.get_current_assessment(db=db, lesson_id=lesson_id, user=user)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+    if req.assessment_id is not None and req.assessment_id != assessment.id:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No assessment exists for this lesson yet. Call GET /lessons/{id}/quiz first."
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This quiz has been replaced. Fetch the current quiz and submit again.",
         )
 
     try:
@@ -190,10 +200,32 @@ async def submit_quiz(
             submission=req,
             user=user
         )
-        return result
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except StepError as exc:
+        raise _from_step_error(exc)
     except Exception as exc:
-        logger.error(f"Quiz submission evaluation error: {exc}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Evaluation failed: {exc}")
+        raise internal_error(logger, exc, "Quiz evaluation failed")
+
+    if not result.passed:
+        try:
+            result.adaptation = await adaptive_agent.adapt_after_assessment(
+                db=db,
+                lesson_id=lesson_id,
+                overall_score=result.overall_score,
+                passed=False,
+                user=user,
+            )
+        except Exception:
+            # The attempt is already saved. Report the replanning failure without a claim that it ran.
+            await db.rollback()
+            logger.exception("Adaptive replanning failed after a saved quiz attempt")
+            result.adaptation = {
+                "action": "unavailable",
+                "message": "Your attempt was saved, but adaptive replanning could not run. Try again later.",
+            }
+
+    return result
 
 
 @router.get("/{lesson_id}/attempts")
@@ -203,6 +235,11 @@ async def list_attempts(
     db: AsyncSession = Depends(get_db)
 ):
     """List student's historical assessment attempts on this lesson."""
+    try:
+        await get_owned_lesson(db, lesson_id, user)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
     stmt = (
         select(AssessmentAttempt)
         .join(Assessment, AssessmentAttempt.assessment_id == Assessment.id)

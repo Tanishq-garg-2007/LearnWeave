@@ -1,61 +1,144 @@
+import asyncio
 import logging
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status
 from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.sql_utils import escape_like
 from app.db.session import get_db
 from app.db.models import User, Workspace, Note, NoteChunk
 from app.api.deps import get_current_user
+from app.api.error_utils import internal_error
 from app.schemas.notes import (
     NoteResponse, NoteDetailResponse, NoteUploadResponse, NoteChunkResponse
 )
-from app.services.document_service import document_processor
+from app.services.document_service import (
+    DocumentError,
+    document_processor,
+    file_type_label,
+    raw_preview,
+    read_upload_limited,
+)
 from app.services.embedding_service import embedding_service
 from app.services.retrieval_service import retriever
 
 logger = logging.getLogger("learnweave.api.notes")
+from app.api.rate_limit import limit_by_ip, limit_by_user
+
 router = APIRouter(prefix="/notes", tags=["Notes & Knowledge Ingestion"])
 
+CHUNK_WORDS = 150
+CHUNK_OVERLAP = 30
+MAX_TITLE_CHARS = 255  # notes.title is VARCHAR(255)
 
-@router.post("/upload", response_model=NoteUploadResponse, status_code=status.HTTP_201_CREATED)
+# Parsing, chunking and embedding are CPU-bound. They run in worker threads, and at most
+# this many uploads may hold a processing slot at once, so uploads cannot starve the pool.
+INGEST_CONCURRENCY = 2
+_ingest_slots = asyncio.Semaphore(INGEST_CONCURRENCY)
+
+
+def _clean_field(value: str) -> str:
+    """Strip NUL characters (PostgreSQL rejects them) and surrounding whitespace."""
+    return value.replace("\x00", "").strip()
+
+
+async def _ingest_document(file_bytes: bytes, filename: str):
+    """
+    Parse, chunk and embed an upload without blocking the event loop.
+
+    Returns (pages, chunks_meta, embeddings). Document problems are raised as DocumentError.
+    Unexpected failures become a generic HTTP error with a reference id.
+    """
+    async with _ingest_slots:
+        try:
+            pages = await asyncio.to_thread(
+                document_processor.extract_text_with_metadata,
+                file_bytes=file_bytes,
+                filename=filename,
+            )
+        except DocumentError:
+            raise
+        except Exception as exc:
+            # A parser crash on malformed input is a client problem, not a server fault.
+            raise internal_error(logger, exc, "Unable to read this document", status_code=422) from exc
+        if not pages:
+            return pages, [], []
+
+        try:
+            chunks_meta = await asyncio.to_thread(
+                document_processor.chunk_text,
+                pages,
+                chunk_word_size=CHUNK_WORDS,
+                overlap=CHUNK_OVERLAP,
+            )
+            if not chunks_meta:
+                return pages, [], []
+            embeddings = await asyncio.to_thread(
+                embedding_service.embed_documents,
+                [c["text_content"] for c in chunks_meta],
+            )
+        except DocumentError:
+            raise
+        except Exception as exc:
+            raise internal_error(logger, exc, "Failed to index this document") from exc
+
+    return pages, chunks_meta, embeddings
+
+
+@router.post("/upload", response_model=NoteUploadResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(limit_by_user('upload', 10, 60))])
 async def upload_note(
     file: UploadFile = File(...),
-    subject: str = Form(...),
-    title: Optional[str] = Form(None),
-    tags: Optional[str] = Form(""),
+    subject: str = Form(..., min_length=1, max_length=255),
+    title: Optional[str] = Form(None, max_length=255),
+    tags: Optional[str] = Form("", max_length=500),
     visibility: Optional[str] = Form("private"),
     is_public: Optional[str] = Form(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Ingest study document (PDF, Markdown, TXT), perform semantic chunking,
+    Ingest study document (PDF or plain text), perform semantic chunking,
     generate local 384-dimensional dense embeddings, and index into PostgreSQL pgvector.
+    The file type is detected from its content, not from the client's content-type.
     """
     if is_public and str(is_public).lower() in ("true", "1", "yes"):
         visibility = "public"
-    filename = file.filename or "uploaded_note.txt"
-    content_type = file.content_type or "text/plain"
+    filename = _clean_field(file.filename or "uploaded_note.txt") or "uploaded_note.txt"
 
-    file_bytes = await file.read()
-    if not file_bytes or len(file_bytes) == 0:
+    try:
+        file_bytes = await read_upload_limited(file)
+    except DocumentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.public_message)
+
+    if not file_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Uploaded file is empty"
         )
 
-    # 25 MB limit
-    if len(file_bytes) > 25 * 1024 * 1024:
+    note_title = (_clean_field(title or "") or filename)[:MAX_TITLE_CHARS]
+    subject_clean = _clean_field(subject)
+    tag_list = [t for t in (_clean_field(raw) for raw in (tags or "").split(",")) if t]
+
+    try:
+        pages, chunks_meta, embeddings = await _ingest_document(file_bytes, filename)
+    except DocumentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.public_message)
+
+    if not pages:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File size exceeds maximum permitted limit of 25MB"
+            detail="No readable text could be extracted from the uploaded document"
+        )
+    if not chunks_meta:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Document text was too short to generate chunks"
         )
 
-    note_title = title.strip() if title and title.strip() else filename
-
-    # Resolve workspace
+    # Resolve workspace (after processing, so a rejected upload creates nothing)
     res = await db.execute(select(Workspace).where(Workspace.user_id == user.id))
     workspace = res.scalars().first()
     if not workspace:
@@ -63,51 +146,14 @@ async def upload_note(
         db.add(workspace)
         await db.flush()
 
-    # Process and extract text
-    try:
-        pages = document_processor.extract_text_with_metadata(
-            file_bytes=file_bytes,
-            filename=filename,
-            content_type=content_type
-        )
-    except Exception as exc:
-        logger.error(f"Failed to extract text from {filename}: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Unable to process document format: {exc}"
-        )
-
-    if not pages:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No readable text could be extracted from the uploaded document"
-        )
-
-    # Chunk text
-    chunks_meta = document_processor.chunk_text(pages, chunk_word_size=150, overlap=30)
-    if not chunks_meta:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Document text was too short to generate chunks"
-        )
-
-    # Generate embeddings
-    chunk_texts = [c["text_content"] for c in chunks_meta]
-    embeddings = embedding_service.embed_documents(chunk_texts)
-
-    # Parse tags
-    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
-
-    # Store Note
-    raw_preview = file_bytes[:10000].decode("utf-8", errors="replace")
     note = Note(
         owner_id=user.id,
         workspace_id=workspace.id,
         title=note_title,
-        subject=subject.strip(),
+        subject=subject_clean,
         tags=tag_list,
-        raw_content=raw_preview,
-        file_type=content_type,
+        raw_content=raw_preview(pages),
+        file_type=file_type_label(file_bytes, filename),
         file_size=len(file_bytes),
         visibility="public" if visibility == "public" else "private",
         processing_status="processed"
@@ -163,7 +209,7 @@ async def list_notes(
     )
 
     if subject:
-        stmt = stmt.where(Note.subject.ilike(f"%{subject}%"))
+        stmt = stmt.where(Note.subject.ilike(f"%{escape_like(subject)}%", escape="\\"))
 
     res = await db.execute(stmt)
     rows = res.all()
@@ -255,11 +301,11 @@ async def delete_note(
     return {"status": "success", "message": "Note deleted successfully", "id": note_id}
 
 
-@router.post("/search")
+@router.post("/search", dependencies=[Depends(limit_by_user('search', 60, 60))])
 async def search_notes(
     query: str,
     subject: Optional[str] = None,
-    top_k: int = 4,
+    top_k: int = Query(4, ge=1, le=20, description="Number of results, from 1 to 20"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -267,6 +313,10 @@ async def search_notes(
     Direct hybrid RAG search endpoint for testing and retrieval verification.
     Combines dense vector search and sparse FTS via RRF (k=60).
     """
+    # The first embedding call loads the model, which can take seconds. Load it in a worker
+    # thread so the event loop keeps serving other users. Later calls return immediately.
+    await asyncio.to_thread(embedding_service.warm_up)
+
     results = await retriever.retrieve(
         db=db,
         query=query,

@@ -1,10 +1,10 @@
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
 from app.db.models import Lesson, LearnerProfile, User
+from app.services.ownership import get_owned_lesson
 from app.services.retrieval_service import retriever
 from app.services.groq_client import groq_client
 from app.schemas.lessons import LessonContent, Section, CitedChunk
@@ -48,19 +48,34 @@ class LessonAgent:
     - Mode B (AI-Generated Learning): Curriculum-guided lesson without notes, tagged as AI-Generated Learning.
     """
 
+    async def ensure_lesson_content(
+        self,
+        db: AsyncSession,
+        lesson_id: str,
+        user: User
+    ) -> Tuple[Lesson, LessonContent, bool]:
+        """Return (lesson, content, cached). Reuses persisted content when present.
+
+        Ownership is enforced here (NotFoundError for lessons the user does not own),
+        so every caller, including the learning-cycle engine, gets the same guarantee.
+        """
+        lesson = await get_owned_lesson(db, lesson_id, user, load_module=True)
+
+        if lesson.lesson_content and lesson.lesson_content.get("sections"):
+            content = LessonContent(**lesson.lesson_content)
+            return lesson, content, True
+
+        content = await self.generate_lesson(db=db, lesson_id=lesson_id, user=user)
+        return lesson, content, False
+
     async def generate_lesson(
         self,
         db: AsyncSession,
         lesson_id: str,
         user: User
     ) -> LessonContent:
-        # Load lesson with module
-        res = await db.execute(
-            select(Lesson).options(selectinload(Lesson.module)).where(Lesson.id == lesson_id)
-        )
-        lesson = res.scalar_one_or_none()
-        if not lesson:
-            raise ValueError(f"Lesson {lesson_id} not found")
+        # Load lesson with module, scoped to the owning user
+        lesson = await get_owned_lesson(db, lesson_id, user, load_module=True)
 
         # Load learner profile
         p_res = await db.execute(select(LearnerProfile).where(LearnerProfile.user_id == user.id))
@@ -72,12 +87,13 @@ class LessonAgent:
         }
 
         # 1. Retrieve relevant personal note chunks
-        retrieved_chunks = await retriever.retrieve(
+        retrieval = await retriever.retrieve_detailed(
             db=db,
             query=f"{lesson.title} {lesson.module.title if lesson.module else ''}",
             user_id=user.id,
             top_k=4
         )
+        retrieved_chunks = retrieval.chunks
 
         # Decide Mode: Mode A if chunks found, Mode B otherwise
         is_rag_grounded = len(retrieved_chunks) > 0
@@ -107,12 +123,16 @@ class LessonAgent:
             )
             content = self._parse_and_validate(raw_data, lesson, retrieved_chunks, grounding_type)
         except Exception as exc:
-            logger.warning(f"Groq generation failed: {exc}. Generating deterministic curriculum lesson.")
+            logger.warning(f"Groq generation failed: {exc!r}. Generating deterministic curriculum lesson.")
             content = self._generate_fallback_lesson(lesson, retrieved_chunks, grounding_type)
 
-        # Persist generated lesson content in DB
-        lesson.lesson_content = content.model_dump()
-        if lesson.status == "not_started":
+        content.retrieval_degraded = retrieval.degraded
+
+        # Persist only complete, authoritative content. If note retrieval was degraded the
+        # grounding decision may be wrong, so leave the lesson uncached and regenerate later.
+        if not retrieval.degraded:
+            lesson.lesson_content = content.model_dump()
+        if lesson.status in ("pending", "not_started"):
             lesson.status = "in_progress"
         await db.commit()
 

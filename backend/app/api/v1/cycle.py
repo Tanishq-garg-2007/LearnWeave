@@ -6,9 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.db.models import User
 from app.api.deps import get_current_user
+from app.api.error_utils import internal_error
 from app.services.cycle_engine import cycle_engine
+from app.services.errors import NotFoundError, StepError
 
 logger = logging.getLogger("learnweave.api.cycle")
+from app.api.rate_limit import limit_by_ip, limit_by_user
+
 router = APIRouter(prefix="/cycle", tags=["Learning Cycle State Machine"])
 
 
@@ -27,22 +31,29 @@ class StepExecuteRequest(BaseModel):
 
 
 
-@router.post("/start")
+@router.post("/start", dependencies=[Depends(limit_by_user('cycle_start', 10, 60))])
 async def start_or_resume_cycle(
     req: CycleStartRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Start or resume the 6-step agentic learning cycle for a lesson.
+    Start or resume the agentic learning cycle for a lesson.
     If a cycle is already in progress, returns the existing cycle.
     """
-    cycle = await cycle_engine.get_or_create_cycle(
-        db=db,
-        user=user,
-        lesson_id=req.lesson_id,
-        idempotency_key=req.idempotency_key
-    )
+    try:
+        cycle = await cycle_engine.get_or_create_cycle(
+            db=db,
+            user=user,
+            lesson_id=req.lesson_id,
+            idempotency_key=req.idempotency_key
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except StepError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+    except Exception as exc:
+        raise internal_error(logger, exc, "Could not start the learning cycle")
     return {
         "cycle_id": cycle.id,
         "lesson_id": cycle.lesson_id,
@@ -63,11 +74,11 @@ async def get_cycle_status(
     try:
         status_data = await cycle_engine.get_cycle_status(db=db, cycle_id=cycle_id, user_id=user.id)
         return status_data
-    except ValueError as exc:
+    except NotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 
 
-@router.post("/{cycle_id}/step")
+@router.post("/{cycle_id}/step", dependencies=[Depends(limit_by_user('cycle_step', 20, 60, llm=True))])
 async def execute_cycle_step(
     cycle_id: str,
     req: StepExecuteRequest,
@@ -75,8 +86,8 @@ async def execute_cycle_step(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Execute a designated cycle step (e.g. lesson_gen, doubt, quiz_gen, eval, adaptive).
-    Idempotent: Reuses cached step outputs if already executed.
+    Execute a designated cycle step (lesson_gen, doubt, quiz_gen, eval, adaptive).
+    Idempotent: reuses cached step outputs if already executed. Steps must run in order.
     """
     try:
         step_result = await cycle_engine.execute_step(
@@ -92,8 +103,9 @@ async def execute_cycle_step(
             "step_result": step_result,
             "cycle": status_data
         }
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except StepError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
     except Exception as exc:
-        logger.error(f"Cycle step execution failed: {exc}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        raise internal_error(logger, exc, "Cycle step failed; you can retry it")

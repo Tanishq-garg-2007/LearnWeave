@@ -23,6 +23,7 @@ export const NotesView: React.FC<NotesViewProps> = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [selectedNote, setSelectedNote] = useState<NoteItem | null>(null);
   const [isPublicUpload, setIsPublicUpload] = useState(false);
+  const [uploadSubject, setUploadSubject] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -52,7 +53,7 @@ export const NotesView: React.FC<NotesViewProps> = () => {
     setSuccessMsg(null);
 
     try {
-      const uploaded = await api.uploadNote(file, isPublicUpload);
+      const uploaded = await api.uploadNote(file, isPublicUpload, uploadSubject || "General");
       setSuccessMsg(`Note "${uploaded.title}" uploaded and split into ${uploaded.chunk_count} semantic chunks.`);
       await fetchNotes();
     } catch (err: any) {
@@ -151,6 +152,14 @@ export const NotesView: React.FC<NotesViewProps> = () => {
               >
                 {isPublicUpload ? "Public (Shared)" : "Private (Only You)"}
               </button>
+              <input
+                type="text"
+                value={uploadSubject}
+                maxLength={255}
+                onChange={(e) => setUploadSubject(e.target.value)}
+                placeholder="Subject (e.g. Operating Systems)"
+                className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+              />
             </div>
           </div>
         </div>

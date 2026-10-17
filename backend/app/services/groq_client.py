@@ -29,7 +29,9 @@ class GroqUsageTracker:
         self.daily_requests = 0
         self.last_day_reset = time.time()
 
-    async def check_and_reserve(self, estimated_tokens: int, max_rpm: int = 28, max_tpm: int = 8000):
+    async def check_and_reserve(self, estimated_tokens: int, max_rpm: Optional[int] = None, max_tpm: Optional[int] = None):
+        max_rpm = max_rpm or settings.GROQ_MAX_RPM
+        max_tpm = max_tpm or settings.GROQ_MAX_TPM
         while True:
             sleep_needed = 0.0
             async with self._lock:
@@ -49,9 +51,9 @@ class GroqUsageTracker:
                     sleep_needed = max(0.2, min(5.0, 60 - (now - self.minute_tokens[0][0]) + 0.1))
                 else:
                     self.minute_requests.append(time.time())
-                    self.minute_tokens.append((time.time(), min(estimated_tokens, 1200)))
+                    self.minute_tokens.append((time.time(), estimated_tokens))
                     self.daily_requests += 1
-                    self.daily_tokens += min(estimated_tokens, 1200)
+                    self.daily_tokens += estimated_tokens
                     return
 
             if sleep_needed > 0:
@@ -90,6 +92,8 @@ class GroqClient:
         enable_fallback: bool = True
     ) -> Dict[str, Any]:
         """Execute chat completion with rate-limiting, retries, and fallback."""
+        if not self.api_key:
+            raise GroqClientError("GROQ_API_KEY is not configured", status_code=None, retryable=False)
         selected_model = model or self.primary_model
         estimated_input_tokens = sum(len(m.get("content", "").split()) * 2 for m in messages)
         total_estimated = estimated_input_tokens + min(max_tokens, 900)
@@ -104,12 +108,20 @@ class GroqClient:
         if enable_fallback and selected_model != self.fallback_model:
             models_to_try.append(self.fallback_model)
 
-        last_error = None
+        last_error: Optional[BaseException] = None
+        last_status: Optional[int] = None
+        deadline = time.monotonic() + settings.GROQ_TOTAL_DEADLINE_SECONDS
         for current_model in models_to_try:
             actual_max_tokens = min(max_tokens, 900) if "qwen" in current_model.lower() else max_tokens
-            max_retries = 5  # Allow sufficient window for rolling 60s Groq limit resets
+            max_retries = max(1, self.max_retries)
 
+            permanent_failure = False
             for attempt in range(max_retries):
+                if time.monotonic() >= deadline:
+                    raise GroqClientError(
+                        f"Groq request exceeded the {settings.GROQ_TOTAL_DEADLINE_SECONDS}s deadline. Last error: {last_error}",
+                        status_code=last_status, retryable=True,
+                    )
                 try:
                     await self.tracker.check_and_reserve(total_estimated)
                     payload: Dict[str, Any] = {
@@ -146,6 +158,11 @@ class GroqClient:
                                 retry_after = 3.0
                             raw_backoff = max(retry_after, (5.0 * (attempt + 1)) + random.uniform(0.5, 2.0))
                             backoff = min(40.0, max(2.0, raw_backoff))
+                            last_status = resp.status_code
+                            last_error = GroqClientError(f"HTTP {resp.status_code}", status_code=resp.status_code, retryable=True)
+                            remaining = deadline - time.monotonic()
+                            if remaining <= backoff:
+                                break  # not enough budget to wait; try the next model
                             logger.warning(
                                 f"Groq HTTP {resp.status_code} on {current_model}. Attempt {attempt + 1}/{max_retries}. Backoff {backoff:.2f}s (retry-after={retry_after}s)"
                             )
@@ -166,17 +183,29 @@ class GroqClient:
                                 return retry_resp.json()
 
                         # Client error (400, 401, 403, 404)
-                        logger.error(f"Groq permanent error {resp.status_code}: {error_body}")
-                        raise GroqClientError(f"Groq API error {resp.status_code}: {error_body}", status_code=resp.status_code)
+                        logger.error(f"Groq permanent error {resp.status_code} on {current_model}: {error_body}")
+                        last_status = resp.status_code
+                        last_error = GroqClientError(f"Groq API error {resp.status_code}", status_code=resp.status_code)
+                        if resp.status_code in (401, 403):
+                            raise last_error  # credentials: no other model will help
+                        permanent_failure = True
+                        break  # 400/404 (e.g. retired model, bad param): try the fallback model
 
                 except httpx.RequestError as exc:
                     logger.warning(f"Groq network error on {current_model}: {exc}. Attempt {attempt + 1}/{max_retries}")
                     await asyncio.sleep(min(6.0, (2 ** attempt) + random.uniform(0.1, 0.5)))
                     last_error = exc
+                    if time.monotonic() >= deadline:
+                        break
 
             logger.warning(f"Model {current_model} exhausted retries. Attempting next candidate if available.")
 
-        raise GroqClientError(f"All Groq models failed. Last error: {last_error}", retryable=False)
+        logger.error(f"All Groq models failed. Last error: {last_error!r}")
+        raise GroqClientError(
+            f"All Groq models failed. Last error: {last_error}",
+            status_code=last_status,
+            retryable=not (isinstance(last_error, GroqClientError) and not last_error.retryable),
+        )
 
     def _extract_json_str(self, text: str) -> str:
         """Extract clean JSON substring from text or markdown code fences."""
@@ -282,8 +311,11 @@ class GroqClient:
             start = content.find("{")
             end = content.rfind("}")
             if start != -1 and end != -1:
-                return json.loads(content[start:end + 1])
-            raise GroqClientError(f"Failed to parse JSON response: {err}")
+                try:
+                    return json.loads(content[start:end + 1])
+                except json.JSONDecodeError as err2:
+                    raise GroqClientError(f"Failed to parse JSON response: {err2}", retryable=True)
+            raise GroqClientError(f"Failed to parse JSON response: {err}", retryable=True)
 
     async def transcribe_audio(self, audio_bytes: bytes, filename: str = "audio.wav") -> str:
         """Transcribe speech using Groq whisper-large-v3-turbo."""
