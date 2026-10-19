@@ -1,0 +1,54 @@
+:root {
+  /* Brand palette primitives (space-separated RGB) */
+  --ink: 37 34 41;
+  --cream: 233 215 205;
+  --sky: 196 225 249;
+  --blush: 250 206 207;
+  --lavender: 216 220 236;
+  --violet: 147 126 221;
+  --blue: 110 162 246;
+  --cyan: 61 204 255;
+  --amber: 217 119 6;
+  --green: 22 163 74;
+  --red: 220 38 38;
+
+  /* Semantic tokens (Light mode default) */
+  --bg: 249 246 243;
+  --surface: 255 255 255;
+  --surface-border: 232 225 220;
+  --text: 37 34 41;
+  --text-muted: 97 93 106; /* Darkened from #827D8E to pass 4.5:1 WCAG AA across all backgrounds */
+  --primary: 37 34 41;
+  --primary-foreground: 255 255 255;
+  --accent-from: 147 126 221;
+  --accent-to: 110 162 246;
+  --focus-ring: 61 204 255;
+  --success: 22 163 74;
+  --warning: 217 119 6;
+  --danger: 220 38 38;
+  --info: 2 132 199;
+}
+
+.dark {
+  --bg: 17 15 20;
+  --surface: 28 25 34;
+  --surface-border: 46 42 56;
+  --text: 247 245 249;
+  --text-muted: 176 172 186;
+  --primary: 247 245 249;
+  --primary-foreground: 25 22 30;
+  --accent-from: 165 146 235;
+  --accent-to: 125 174 250;
+  --focus-ring: 61 204 255;
+  --success: 34 197 94;
+  --warning: 245 158 11;
+  --danger: 239 68 68;
+  --info: 56 189 248;
+}
+
+/* Fallback for browsers that do not support backdrop-filter */
+@supports not (backdrop-filter: blur(1px)) {
+  .glass-surface {
+    background-color: rgba(255, 255, 255, 0.85) !important;
+  }
+}
