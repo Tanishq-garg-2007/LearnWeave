@@ -1,11 +1,14 @@
 import React from "react";
 import { ConfirmProvider } from "@/components/ui/ConfirmDialog";
+import { ToastProvider } from "@/components/ui/Toast";
 
 export function App(): JSX.Element {
   return (
-    <ConfirmProvider>
-      <div>LearnWeave</div>
-    </ConfirmProvider>
+    <ToastProvider>
+      <ConfirmProvider>
+        <div>LearnWeave</div>
+      </ConfirmProvider>
+    </ToastProvider>
   );
 }
 

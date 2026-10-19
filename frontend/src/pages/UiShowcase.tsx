@@ -19,6 +19,7 @@ import {
   GlassCard,
   Modal,
   useConfirm,
+  useToast,
 } from "@/components/ui";
 import { AppBackground } from "@/components/layout/AppBackground";
 import { Sparkles, ArrowRight, Bell, Trash2, Heart, Search, BookOpen } from "lucide-react";
@@ -51,6 +52,15 @@ export function UiShowcase({
     confirmFn = null;
   }
 
+  // useToast safely inside ToastProvider
+  let toastObj: ReturnType<typeof useToast> | null = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    toastObj = useToast();
+  } catch {
+    toastObj = null;
+  }
+
   const handleOpenConfirm = async () => {
     if (onOpenConfirm) {
       onOpenConfirm();
@@ -65,6 +75,22 @@ export function UiShowcase({
         tone: "danger",
       });
       setConfirmResult(ok ? "Confirmed" : "Cancelled");
+    }
+  };
+
+  const handleShowToast = () => {
+    if (onShowToast) {
+      onShowToast();
+      return;
+    }
+    if (toastObj) {
+      toastObj.success("Sprint Quiz Completed", {
+        description: "You scored 85% on Gradient Descent fundamentals.",
+        action: {
+          label: "View feedback",
+          onClick: () => console.log("Feedback clicked"),
+        },
+      });
     }
   };
 
@@ -106,7 +132,7 @@ export function UiShowcase({
               </Button>
               <Button
                 variant="ghost"
-                onClick={onShowToast}
+                onClick={handleShowToast}
                 leftIcon={<Bell className="w-4 h-4" />}
               >
                 Trigger Toast
