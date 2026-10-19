@@ -4,8 +4,8 @@ import {
   useLocation,
   useRouteError,
   Link,
-  Outlet,
 } from "react-router-dom";
+import { AppShell } from "@/components/layout/AppShell";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -84,7 +84,7 @@ function RoutePageContainer({
 }
 
 function RootLayout(): JSX.Element {
-  return <Outlet />;
+  return <AppShell />;
 }
 
 // 16 canonical application routes
