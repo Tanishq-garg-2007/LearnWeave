@@ -15,19 +15,38 @@ export const SESSION_EXPIRED_EVENT = "session-expired";
 const DEFAULT_TIMEOUT_MS = 30_000;
 export const LLM_TIMEOUT_MS = 150_000;
 
+export type UnauthorizedHandler = () => void;
+let unauthorizedHandler: UnauthorizedHandler | null = null;
+
+export function registerUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
+  unauthorizedHandler = handler;
+}
+
 export function getAuthToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem(TOKEN_STORAGE_KEY);
+  try {
+    return sessionStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
 }
 
 export function setAuthToken(token: string): void {
   if (typeof window === "undefined") return;
-  localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  try {
+    sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+  } catch {
+    // Ignore storage quota or access errors in restricted sandbox
+  }
 }
 
 export function clearAuthToken(): void {
   if (typeof window === "undefined") return;
-  localStorage.removeItem(TOKEN_STORAGE_KEY);
+  try {
+    sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // Ignore storage access errors
+  }
 }
 
 interface ValidationErrorItem {
@@ -162,6 +181,9 @@ export async function rawRequest(
       !path.startsWith("/auth/register")
     ) {
       clearAuthToken();
+      if (unauthorizedHandler) {
+        unauthorizedHandler();
+      }
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
       }

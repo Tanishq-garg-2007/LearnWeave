@@ -1,6 +1,6 @@
 import React from "react";
-import { PlaceholderPage } from "./PlaceholderPage";
+import { RegisterForm } from "@/features/auth/RegisterForm";
 
 export default function RegisterPage(): JSX.Element {
-  return <PlaceholderPage title="Create Account" batch="Coming in Feature 10" />;
+  return <RegisterForm />;
 }

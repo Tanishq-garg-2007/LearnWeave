@@ -1,6 +1,6 @@
 import React from "react";
-import { PlaceholderPage } from "./PlaceholderPage";
+import { LoginForm } from "@/features/auth/LoginForm";
 
 export default function LoginPage(): JSX.Element {
-  return <PlaceholderPage title="Sign In" batch="Coming in Feature 10" />;
+  return <LoginForm />;
 }

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "@/components/ui/Toast";
 import { ConfirmProvider } from "@/components/ui/ConfirmDialog";
+import { AuthProvider } from "@/features/auth/AuthProvider";
 import { ApiError } from "@/api/http";
 
 export interface AppProvidersProps {
@@ -33,7 +34,9 @@ export function AppProviders({ children }: AppProvidersProps): JSX.Element {
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <ConfirmProvider>{children}</ConfirmProvider>
+        <ConfirmProvider>
+          <AuthProvider>{children}</AuthProvider>
+        </ConfirmProvider>
       </ToastProvider>
     </QueryClientProvider>
   );

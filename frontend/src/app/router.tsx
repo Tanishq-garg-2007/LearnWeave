@@ -6,6 +6,7 @@ import {
   Link,
 } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
+import { RequireAuth, GuestOnly } from "@/features/auth";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -100,73 +101,91 @@ const baseRoutes = [
   {
     path: "/login",
     element: (
-      <RoutePageContainer title="Sign In">
-        <LoginPage />
-      </RoutePageContainer>
+      <GuestOnly>
+        <RoutePageContainer title="Sign In">
+          <LoginPage />
+        </RoutePageContainer>
+      </GuestOnly>
     ),
   },
   {
     path: "/register",
     element: (
-      <RoutePageContainer title="Create Account">
-        <RegisterPage />
-      </RoutePageContainer>
+      <GuestOnly>
+        <RoutePageContainer title="Create Account">
+          <RegisterPage />
+        </RoutePageContainer>
+      </GuestOnly>
     ),
   },
   {
     path: "/onboarding",
     element: (
-      <RoutePageContainer title="Set Goal">
-        <OnboardingPage />
-      </RoutePageContainer>
+      <RequireAuth>
+        <RoutePageContainer title="Set Goal">
+          <OnboardingPage />
+        </RoutePageContainer>
+      </RequireAuth>
     ),
   },
   {
     path: "/dashboard",
     element: (
-      <RoutePageContainer title="Dashboard">
-        <DashboardPage />
-      </RoutePageContainer>
+      <RequireAuth>
+        <RoutePageContainer title="Dashboard">
+          <DashboardPage />
+        </RoutePageContainer>
+      </RequireAuth>
     ),
   },
   {
     path: "/roadmap",
     element: (
-      <RoutePageContainer title="Roadmap">
-        <RoadmapPage />
-      </RoutePageContainer>
+      <RequireAuth>
+        <RoutePageContainer title="Roadmap">
+          <RoadmapPage />
+        </RoutePageContainer>
+      </RequireAuth>
     ),
   },
   {
     path: "/lessons/:lessonId",
     element: (
-      <RoutePageContainer title="Lesson">
-        <LessonDetailPage />
-      </RoutePageContainer>
+      <RequireAuth>
+        <RoutePageContainer title="Lesson">
+          <LessonDetailPage />
+        </RoutePageContainer>
+      </RequireAuth>
     ),
   },
   {
     path: "/notes",
     element: (
-      <RoutePageContainer title="Notes">
-        <NotesPage />
-      </RoutePageContainer>
+      <RequireAuth>
+        <RoutePageContainer title="Notes">
+          <NotesPage />
+        </RoutePageContainer>
+      </RequireAuth>
     ),
   },
   {
     path: "/notes/:noteId",
     element: (
-      <RoutePageContainer title="Note Detail">
-        <NoteDetailPage />
-      </RoutePageContainer>
+      <RequireAuth>
+        <RoutePageContainer title="Note Detail">
+          <NoteDetailPage />
+        </RoutePageContainer>
+      </RequireAuth>
     ),
   },
   {
     path: "/schedule",
     element: (
-      <RoutePageContainer title="Schedule">
-        <SchedulePage />
-      </RoutePageContainer>
+      <RequireAuth>
+        <RoutePageContainer title="Schedule">
+          <SchedulePage />
+        </RoutePageContainer>
+      </RequireAuth>
     ),
   },
   {
@@ -188,25 +207,31 @@ const baseRoutes = [
   {
     path: "/profile",
     element: (
-      <RoutePageContainer title="Profile">
-        <ProfilePage />
-      </RoutePageContainer>
+      <RequireAuth>
+        <RoutePageContainer title="Profile">
+          <ProfilePage />
+        </RoutePageContainer>
+      </RequireAuth>
     ),
   },
   {
     path: "/goals",
     element: (
-      <RoutePageContainer title="Goals">
-        <GoalsPage />
-      </RoutePageContainer>
+      <RequireAuth>
+        <RoutePageContainer title="Goals">
+          <GoalsPage />
+        </RoutePageContainer>
+      </RequireAuth>
     ),
   },
   {
     path: "/roadmaps/:roadmapId/history",
     element: (
-      <RoutePageContainer title="Roadmap History">
-        <RoadmapHistoryPage />
-      </RoutePageContainer>
+      <RequireAuth>
+        <RoutePageContainer title="Roadmap History">
+          <RoadmapHistoryPage />
+        </RoutePageContainer>
+      </RequireAuth>
     ),
   },
   {

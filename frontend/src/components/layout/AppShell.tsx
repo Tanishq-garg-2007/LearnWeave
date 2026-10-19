@@ -4,6 +4,7 @@ import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/Button";
 import { Avatar } from "@/components/ui/Avatar";
 import { AppBackground } from "./AppBackground";
+import { useAuth } from "@/features/auth/AuthProvider";
 import {
   Compass,
   BookOpen,
@@ -38,10 +39,9 @@ export function AppShell({ children }: AppShellProps): JSX.Element {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const location = useLocation();
+  const { user, status, logout } = useAuth();
 
-  // Check if token exists in localStorage
-  const token = typeof window !== "undefined" ? localStorage.getItem("learnweave_token") : null;
-  const isAuthenticated = Boolean(token);
+  const isAuthenticated = status === "authenticated";
 
   useEffect(() => {
     setUserMenuOpen(false);
@@ -58,8 +58,7 @@ export function AppShell({ children }: AppShellProps): JSX.Element {
   }, []);
 
   const handleSignOut = () => {
-    localStorage.removeItem("learnweave_token");
-    window.location.href = "/login";
+    logout();
   };
 
   return (
@@ -140,7 +139,7 @@ export function AppShell({ children }: AppShellProps): JSX.Element {
                     onClick={() => setUserMenuOpen(!userMenuOpen)}
                     className="flex items-center gap-1.5 p-1 rounded-full hover:bg-black/5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
                   >
-                    <Avatar size="sm" name="Learner" />
+                    <Avatar size="sm" name={user?.full_name || user?.email || "Student"} />
                     <ChevronDown className="w-3.5 h-3.5 text-muted hidden sm:block" />
                   </button>
 
