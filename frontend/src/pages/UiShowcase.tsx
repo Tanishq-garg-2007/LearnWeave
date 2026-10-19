@@ -17,6 +17,8 @@ import {
   Avatar,
   EmptyState,
   GlassCard,
+  Modal,
+  useConfirm,
 } from "@/components/ui";
 import { AppBackground } from "@/components/layout/AppBackground";
 import { Sparkles, ArrowRight, Bell, Trash2, Heart, Search, BookOpen } from "lucide-react";
@@ -37,6 +39,34 @@ export function UiShowcase({
   const [btnLoading, setBtnLoading] = useState(false);
   const [inputValue, setInputValue] = useState("");
   const [inputError, setInputError] = useState(false);
+  const [demoModalOpen, setDemoModalOpen] = useState(false);
+  const [confirmResult, setConfirmResult] = useState<string | null>(null);
+
+  // useConfirm safely inside ConfirmProvider
+  let confirmFn: ReturnType<typeof useConfirm> | null = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    confirmFn = useConfirm();
+  } catch {
+    confirmFn = null;
+  }
+
+  const handleOpenConfirm = async () => {
+    if (onOpenConfirm) {
+      onOpenConfirm();
+      return;
+    }
+    if (confirmFn) {
+      const ok = await confirmFn({
+        title: "Delete Active Roadmap?",
+        description: "This will reset your 2-week active sprint progress. This action cannot be undone.",
+        confirmText: "Delete Roadmap",
+        cancelText: "Keep Progress",
+        tone: "danger",
+      });
+      setConfirmResult(ok ? "Confirmed" : "Cancelled");
+    }
+  };
 
   return (
     <div className="relative min-h-screen py-12 px-4 sm:px-6 lg:px-8">
@@ -62,14 +92,14 @@ export function UiShowcase({
             <div className="flex flex-wrap items-center gap-3">
               <Button
                 variant="primary"
-                onClick={onOpenModal}
+                onClick={onOpenModal || (() => setDemoModalOpen(true))}
                 leftIcon={<Sparkles className="w-4 h-4" />}
               >
                 Open Modal
               </Button>
               <Button
                 variant="secondary"
-                onClick={onOpenConfirm}
+                onClick={handleOpenConfirm}
                 leftIcon={<Trash2 className="w-4 h-4 text-danger" />}
               >
                 Trigger Confirm Dialog
@@ -81,9 +111,43 @@ export function UiShowcase({
               >
                 Trigger Toast
               </Button>
+              {confirmResult && (
+                <span className="text-xs font-mono px-2.5 py-1 rounded-full bg-black/5 text-text">
+                  Last result: {confirmResult}
+                </span>
+              )}
             </div>
           </GlassCard>
         </section>
+
+        {/* Modal Demo */}
+        <Modal
+          open={demoModalOpen}
+          onClose={() => setDemoModalOpen(false)}
+          title="Curriculum Adaptation"
+          description="The AI learning engine has detected prerequisite gaps in linear algebra."
+          size="md"
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setDemoModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button variant="primary" onClick={() => setDemoModalOpen(false)}>
+                Apply Remedial Lesson
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-3">
+            <p className="text-sm text-text">
+              Would you like to insert a 20-minute remedial lesson on Matrix Transformations before proceeding to Gradient Descent?
+            </p>
+            <div className="p-3.5 rounded-2xl bg-sky/20 border border-sky/30 text-xs text-ink space-y-1">
+              <p className="font-semibold">Estimated Impact:</p>
+              <p>Closes 85% of concept doubts seen in quiz 2.</p>
+            </div>
+          </div>
+        </Modal>
 
         {/* Buttons and IconButtons */}
         <section aria-labelledby="buttons-heading">

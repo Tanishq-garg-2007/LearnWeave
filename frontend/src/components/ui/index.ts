@@ -13,3 +13,5 @@ export * from "./Skeleton";
 export * from "./Avatar";
 export * from "./EmptyState";
 export * from "./GlassCard";
+export * from "./Modal";
+export * from "./ConfirmDialog";
