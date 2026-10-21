@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { getMe, login as apiLogin, register as apiRegister } from "@/api/auth";
-import { getAuthToken, clearAuthToken, registerUnauthorizedHandler } from "@/api/http";
+import { getAuthToken, clearAuthToken, registerUnauthorizedHandler, ApiError } from "@/api/http";
 import type { UserResponse, UserLoginRequest, UserRegisterRequest } from "@/api/types";
 import { useToast } from "@/components/ui/Toast";
 import { useQueryClient } from "@tanstack/react-query";
@@ -46,11 +46,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }): JSX.E
           setStatus("authenticated");
         }
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (isMounted) {
-          clearAuthToken();
-          setUser(null);
-          setStatus("guest");
+          if (err instanceof ApiError && err.status === 401) {
+            clearAuthToken();
+            setUser(null);
+            setStatus("guest");
+          } else {
+            // Keep token intact across transient network drops / 5xx server glitches
+            setStatus("guest");
+          }
         }
       });
 

@@ -97,7 +97,7 @@ export default function LessonDetailPage(): JSX.Element {
 
       {/* Lesson Content Sections */}
       <div className="space-y-4">
-        {lesson.content?.sections?.map((sec: any, idx: number) => (
+        {(lesson.content?.sections || lesson.lesson_content?.sections)?.map((sec: any, idx: number) => (
           <div
             key={idx}
             className="p-6 rounded-3xl bg-white/60 hover:bg-white/85 border border-white/85 shadow-[0_16px_40px_-10px_rgba(40,30,60,0.06)] ring-1 ring-inset ring-white/80 backdrop-blur-xl space-y-2 text-left transition-all"
@@ -106,10 +106,10 @@ export default function LessonDetailPage(): JSX.Element {
               <span className="w-5 h-5 rounded-md bg-black/5 text-[10px] flex items-center justify-center font-mono">
                 {idx + 1}
               </span>
-              {sec.title}
+              {sec.title || sec.heading || `Section ${idx + 1}`}
             </h3>
             <p className="text-xs text-text/80 leading-relaxed whitespace-pre-line pl-7">
-              {sec.explanation}
+              {sec.explanation || sec.content}
             </p>
           </div>
         ))}

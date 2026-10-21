@@ -25,7 +25,7 @@ export function registerUnauthorizedHandler(handler: UnauthorizedHandler | null)
 export function getAuthToken(): string | null {
   if (typeof window === "undefined") return null;
   try {
-    return sessionStorage.getItem(TOKEN_STORAGE_KEY);
+    return sessionStorage.getItem(TOKEN_STORAGE_KEY) || localStorage.getItem(TOKEN_STORAGE_KEY);
   } catch {
     return null;
   }
@@ -35,6 +35,7 @@ export function setAuthToken(token: string): void {
   if (typeof window === "undefined") return;
   try {
     sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+    localStorage.setItem(TOKEN_STORAGE_KEY, token);
   } catch {
     // Ignore storage quota or access errors in restricted sandbox
   }
@@ -44,6 +45,7 @@ export function clearAuthToken(): void {
   if (typeof window === "undefined") return;
   try {
     sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
   } catch {
     // Ignore storage access errors
   }

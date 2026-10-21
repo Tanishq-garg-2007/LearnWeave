@@ -7,6 +7,7 @@ from app.db.models import Lesson, LearnerProfile, User
 from app.services.ownership import get_owned_lesson
 from app.services.retrieval_service import retriever
 from app.services.groq_client import groq_client
+from app.services.lesson_status import set_lesson_status
 from app.schemas.lessons import LessonContent, Section, CitedChunk
 
 logger = logging.getLogger("learnweave.lesson_agent")
@@ -133,7 +134,7 @@ class LessonAgent:
         if not retrieval.degraded:
             lesson.lesson_content = content.model_dump()
         if lesson.status in ("pending", "not_started"):
-            lesson.status = "in_progress"
+            await set_lesson_status(db, user.id, lesson, "in_progress")
         await db.commit()
 
         return content

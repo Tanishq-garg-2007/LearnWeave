@@ -235,7 +235,7 @@ class QuizAgent:
                 schema=QUIZ_SCHEMA,
                 system_message=system_msg,
                 temperature=0.2,
-                max_tokens=850
+                max_tokens=2200
             )
         except Exception as exc:
             logger.warning(f"Quiz generation via Groq failed: {exc}. Generating deterministic fallback quiz.")

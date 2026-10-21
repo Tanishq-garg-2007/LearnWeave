@@ -74,6 +74,7 @@ class GroqClient:
         self.max_retries = settings.GROQ_MAX_RETRIES
         self.max_combined_tokens = settings.GROQ_MAX_COMBINED_TOKENS
         self.tracker = GroqUsageTracker()
+        self._model_cooldown: Dict[str, float] = {}
 
     def _get_headers(self) -> Dict[str, str]:
         return {
@@ -104,24 +105,28 @@ class GroqClient:
                 retryable=False
             )
 
-        models_to_try = [selected_model]
-        if enable_fallback and selected_model != self.fallback_model:
+        models_to_try: List[str] = []
+        now = time.monotonic()
+        if enable_fallback and now < self._model_cooldown.get(selected_model, 0) and selected_model != self.fallback_model:
             models_to_try.append(self.fallback_model)
+            models_to_try.append(selected_model)
+        else:
+            models_to_try.append(selected_model)
+            if enable_fallback and selected_model != self.fallback_model:
+                models_to_try.append(self.fallback_model)
 
         last_error: Optional[BaseException] = None
         last_status: Optional[int] = None
-        deadline = time.monotonic() + settings.GROQ_TOTAL_DEADLINE_SECONDS
         for current_model in models_to_try:
-            actual_max_tokens = min(max_tokens, 900) if "qwen" in current_model.lower() else max_tokens
+            actual_max_tokens = max_tokens
             max_retries = max(1, self.max_retries)
+            model_deadline = time.monotonic() + settings.GROQ_TOTAL_DEADLINE_SECONDS
 
             permanent_failure = False
             for attempt in range(max_retries):
-                if time.monotonic() >= deadline:
-                    raise GroqClientError(
-                        f"Groq request exceeded the {settings.GROQ_TOTAL_DEADLINE_SECONDS}s deadline. Last error: {last_error}",
-                        status_code=last_status, retryable=True,
-                    )
+                if time.monotonic() >= model_deadline:
+                    logger.warning(f"Model {current_model} reached deadline ({settings.GROQ_TOTAL_DEADLINE_SECONDS}s). Trying fallback candidate if available.")
+                    break
                 try:
                     await self.tracker.check_and_reserve(total_estimated)
                     payload: Dict[str, Any] = {
@@ -130,7 +135,7 @@ class GroqClient:
                         "max_tokens": actual_max_tokens,
                         "temperature": temperature,
                     }
-                    if self.reasoning_mode and "qwen" in current_model.lower():
+                    if self.reasoning_mode:
                         payload["reasoning_format"] = self.reasoning_mode
                     if response_format:
                         payload["response_format"] = response_format
@@ -156,13 +161,16 @@ class GroqClient:
                                 retry_after = float(resp.headers.get("retry-after", "3"))
                             except ValueError:
                                 retry_after = 3.0
+                            if resp.status_code == 429 and retry_after > 5.0:
+                                self._model_cooldown[current_model] = time.monotonic() + retry_after
                             raw_backoff = max(retry_after, (5.0 * (attempt + 1)) + random.uniform(0.5, 2.0))
                             backoff = min(40.0, max(2.0, raw_backoff))
                             last_status = resp.status_code
                             last_error = GroqClientError(f"HTTP {resp.status_code}", status_code=resp.status_code, retryable=True)
-                            remaining = deadline - time.monotonic()
-                            if remaining <= backoff:
-                                break  # not enough budget to wait; try the next model
+                            remaining = model_deadline - time.monotonic()
+                            if remaining <= backoff or (resp.status_code == 429 and retry_after > 15.0 and len(models_to_try) > 1 and current_model != models_to_try[-1]):
+                                logger.warning(f"Model {current_model} backoff ({backoff:.2f}s) or high retry-after ({retry_after:.1f}s) exceeds threshold. Trying fallback candidate immediately.")
+                                break  # not enough budget to wait or rate-limited for too long; try the next model
                             logger.warning(
                                 f"Groq HTTP {resp.status_code} on {current_model}. Attempt {attempt + 1}/{max_retries}. Backoff {backoff:.2f}s (retry-after={retry_after}s)"
                             )
@@ -195,7 +203,7 @@ class GroqClient:
                     logger.warning(f"Groq network error on {current_model}: {exc}. Attempt {attempt + 1}/{max_retries}")
                     await asyncio.sleep(min(6.0, (2 ** attempt) + random.uniform(0.1, 0.5)))
                     last_error = exc
-                    if time.monotonic() >= deadline:
+                    if time.monotonic() >= model_deadline:
                         break
 
             logger.warning(f"Model {current_model} exhausted retries. Attempting next candidate if available.")

@@ -46,3 +46,14 @@ __pycache__/
 .pytest_cache/
 
 /LearnWeave-main/
+
+# Agent & AI tool cache
+.agents/
+.claude/
+agent/
+skills-lock.json
+
+# Model weights & large binaries (exceeds GitHub 100MB limit)
+models/*.onnx
+models/*.bin
+models/*.wav

@@ -43,7 +43,7 @@ def _fake_payload(messages):
                     {"title": f"Week {w} Lesson A", "learning_objectives": ["Basics"],
                      "duration_minutes": 45, "prerequisite_titles": [], "is_revision": False},
                     {"title": f"Week {w} Lesson B", "learning_objectives": ["Practice"],
-                     "duration_minutes": 45, "prerequisite_titles": [], "is_revision": False},
+                     "duration_minutes": 45, "prerequisite_titles": [], "is_revision": (w == 2)},
                 ],
             })
         return {"title": "Roadmap", "subject": "Test", "overview": "Overview",
@@ -123,8 +123,12 @@ def _lesson_ids(roadmap: dict) -> list:
     return [lesson["id"] for module in roadmap["modules"] for lesson in module["lessons"]]
 
 
-async def _sessions(client, headers, roadmap_id=None) -> list:
-    params = {"roadmap_id": roadmap_id} if roadmap_id is not None else {}
+async def _sessions(client, headers, roadmap_id=None, upcoming_only: bool = False) -> list:
+    params = {}
+    if roadmap_id is not None:
+        params["roadmap_id"] = roadmap_id
+    if upcoming_only:
+        params["upcoming_only"] = "true"
     res = await client.get("/api/v1/schedule", params=params, headers=headers)
     assert res.status_code == 200, res.text
     return res.json()["sessions"]
@@ -267,7 +271,7 @@ async def test_generate_does_not_schedule_completed_or_skipped_lessons(client):
     res = await _generate(client, headers, roadmap["id"])
     assert res.status_code == 200, res.text
 
-    scheduled_ids = {s["lesson_id"] for s in await _sessions(client, headers)}
+    scheduled_ids = {s["lesson_id"] for s in await _sessions(client, headers, upcoming_only=True)}
     assert done_id not in scheduled_ids
     assert skipped_id not in scheduled_ids
     assert scheduled_ids == set(lessons[2:])

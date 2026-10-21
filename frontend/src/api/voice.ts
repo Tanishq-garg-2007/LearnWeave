@@ -5,7 +5,10 @@ export async function speak(text: string, voice = "af_heart"): Promise<Blob> {
     body: { text: text.slice(0, 5000), voice },
     timeoutMs: LLM_TIMEOUT_MS,
   });
-  return res.blob();
+  const engine = res.headers.get("X-Audio-Engine") || "kokoro-82m";
+  const blob = await res.blob();
+  (blob as any).engine = engine;
+  return blob;
 }
 
 export async function listen(audioBlob: Blob): Promise<{ transcription: string }> {

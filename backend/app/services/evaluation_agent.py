@@ -11,6 +11,7 @@ from app.services.errors import NotFoundError, StepError
 from app.services.groq_client import groq_client
 from app.services.learning_topics import topic_lesson_for
 from app.services.ownership import get_owned_assessment
+from app.services.lesson_status import set_lesson_status
 from app.schemas.lessons import AnswerEvaluation, QuizSubmitRequest, QuizSubmitResponse
 
 logger = logging.getLogger("learnweave.evaluation_agent")
@@ -179,14 +180,12 @@ class EvaluationAgent:
             weak = list(profile.weak_areas or [])
 
             if passed:
-                if lesson.id not in completed:
-                    completed.append(lesson.id)
-                profile.completed_lessons = completed
-                lesson.status = "completed"
+                await set_lesson_status(db, user.id, lesson, "completed")
                 # Passing a revision clears the weak area of the lesson it revises (its title, not "Targeted Revision: ...").
-                weak = [w for w in weak if w not in (topic, lesson.title)]
+                weak = [w for w in (profile.weak_areas or []) if w not in (topic, lesson.title)]
                 profile.weak_areas = weak
             else:
+                weak = list(profile.weak_areas or [])
                 if topic not in weak:
                     weak.append(topic)
                 profile.weak_areas = weak

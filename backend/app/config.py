@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # Groq Settings
     GROQ_API_KEY: str = ""
     GROQ_PRIMARY_MODEL: str = "qwen/qwen3.8-27b"
-    GROQ_FALLBACK_MODEL: str = "openai/gpt-oss-20b"
+    GROQ_FALLBACK_MODEL: str = "openai/gpt-oss-120b"
     GROQ_STT_MODEL: str = "whisper-large-v3-turbo"
     GROQ_REASONING_MODE: str = "hidden"
     GROQ_TIMEOUT_SECONDS: int = 60
@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     GROQ_MAX_COMBINED_TOKENS: int = 6000
     GROQ_MAX_RPM: int = 28
     GROQ_MAX_TPM: int = 8000
-    GROQ_TOTAL_DEADLINE_SECONDS: int = 45
+    GROQ_TOTAL_DEADLINE_SECONDS: int = 90
 
     # PostgreSQL Database (local-development defaults only; non-development
     # environments refuse to start with the default credentials, see _check_security)

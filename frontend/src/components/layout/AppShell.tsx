@@ -89,8 +89,12 @@ export function AppShell({ children }: AppShellProps): JSX.Element {
               to={isAuthenticated ? "/dashboard" : "/"}
               className="flex items-center gap-2.5 group rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             >
-              <div className="h-9 w-9 rounded-2xl bg-[#252229] flex items-center justify-center text-white shadow-soft group-hover:scale-105 transition-transform">
-                <Sparkles className="w-4 h-4 text-cyan-300" />
+              <div className="h-9 w-9 rounded-2xl bg-[#252229] flex items-center justify-center text-white shadow-soft group-hover:scale-105 transition-transform p-1.5">
+                <img
+                  src="/favicon-white-96x96.png"
+                  alt="LearnWeave Favicon"
+                  className="w-5 h-5 object-contain"
+                />
               </div>
               <div className="flex items-baseline gap-1.5">
                 <span className="font-display text-2xl font-bold tracking-tight text-ink">

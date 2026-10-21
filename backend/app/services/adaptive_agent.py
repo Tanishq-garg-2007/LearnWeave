@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import Lesson, LearnerProfile, Roadmap, RoadmapVersion, StudySchedule, User
 from app.services.learning_topics import REMEDIAL_KEY, topic_lesson_for
 from app.services.ownership import get_owned_lesson
+from app.services.lesson_status import set_lesson_status
 
 logger = logging.getLogger("learnweave.adaptive_agent")
 
@@ -54,14 +55,9 @@ class AdaptiveReplanningAgent:
 
         if passed:
             logger.info(f"Student passed {lesson.title} ({score_pct}%). Advancing progression.")
-            lesson.status = "completed"
+            await set_lesson_status(db, user.id, lesson, "completed")
 
             if profile:
-                completed = list(profile.completed_lessons or [])
-                if lesson.id not in completed:
-                    completed.append(lesson.id)
-                profile.completed_lessons = completed
-
                 weak = list(profile.weak_areas or [])
                 weak = [w for w in weak if w not in (topic.title, lesson.title)]
                 profile.weak_areas = weak

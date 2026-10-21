@@ -247,7 +247,7 @@ class HybridRetriever:
         if not tokens:
             return []
 
-        conditions = [NoteChunk.text_content.ilike(f"%{tok}%") for tok in tokens]
+        conditions = [NoteChunk.text_content.ilike(f"%{escape_like(tok)}%", escape="\\") for tok in tokens]
         stmt = (
             select(
                 NoteChunk.id,

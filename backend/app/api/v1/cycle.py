@@ -9,9 +9,19 @@ from app.api.deps import get_current_user
 from app.api.error_utils import internal_error
 from app.services.cycle_engine import cycle_engine
 from app.services.errors import NotFoundError, StepError
+from app.services.quiz_agent import QuizGenerationError
 
 logger = logging.getLogger("learnweave.api.cycle")
 from app.api.rate_limit import limit_by_ip, limit_by_user
+
+RETRY_AFTER = "30"
+
+
+def _unavailable(exc: BaseException, public_message: str) -> HTTPException:
+    err = internal_error(logger, exc, public_message, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+    err.headers = {"Retry-After": RETRY_AFTER}
+    return err
+
 
 router = APIRouter(prefix="/cycle", tags=["Learning Cycle State Machine"])
 
@@ -105,6 +115,8 @@ async def execute_cycle_step(
         }
     except NotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except QuizGenerationError as exc:
+        raise _unavailable(exc, "Quiz generation is temporarily unavailable")
     except StepError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc))
     except Exception as exc:

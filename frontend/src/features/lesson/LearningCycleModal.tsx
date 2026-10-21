@@ -46,6 +46,9 @@ export function LearningCycleModal({
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [voiceSpeed, setVoiceSpeed] = useState<number>(1);
+  const [isSynthesizingVoice, setIsSynthesizingVoice] = useState(false);
+  const [selectedVoice, setSelectedVoice] = useState<string>("af_heart");
+  const [audioEngine, setAudioEngine] = useState<string>("kokoro-82m");
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Doubts state
@@ -97,8 +100,9 @@ export function LearningCycleModal({
       let contentData: any = null;
       try {
         const fetched = await api.getLesson(lesson.id);
-        if (fetched?.content?.sections && fetched.content.sections.length > 0) {
-          contentData = fetched;
+        const raw = fetched?.content || (fetched as any)?.lesson_content;
+        if (raw?.sections && raw.sections.length > 0) {
+          contentData = { ...fetched, content: raw };
         }
       } catch {
         // Not generated yet, proceed to generate
@@ -124,25 +128,41 @@ export function LearningCycleModal({
     }
   };
 
+  // Helper to extract clean text for narration
+  const getNarrationText = (): string => {
+    const content = (lessonData as any)?.content || (lessonData as any)?.lesson_content || (lesson as any)?.content || (lesson as any)?.lesson_content;
+    let text = "";
+    if (typeof content?.summary === "string" && content.summary.trim()) {
+      text = content.summary.trim();
+    } else if (Array.isArray(content?.key_takeaways) && content.key_takeaways.length > 0) {
+      text = content.key_takeaways.join(". ");
+    } else if (Array.isArray(content?.sections) && content.sections.length > 0) {
+      const first = content.sections[0];
+      text = (first.content || first.explanation || first.heading || first.title || "").slice(0, 500);
+    }
+    if (!text.trim()) {
+      text = `Welcome to this interactive lesson on ${lesson?.title || "your study topic"}. We will cover the essential principles, architecture, and step-by-step concepts.`;
+    }
+    return text;
+  };
+
   // Synthesize voice audio via Kokoro TTS
   const handleSynthesizeVoice = async () => {
-    if (!lessonData?.content) return;
-    setIsLoading(true);
+    setIsSynthesizingVoice(true);
     try {
-      const summaryText =
-        lessonData.content.key_takeaways?.join(". ") ||
-        lessonData.content.sections?.[0]?.explanation ||
-        `Lesson on ${lesson?.title}`;
-
-      const blob = await api.speak(summaryText);
+      const summaryText = getNarrationText();
+      const blob = await api.speak(summaryText, selectedVoice);
+      if ((blob as any).engine) {
+        setAudioEngine((blob as any).engine);
+      }
       const url = URL.createObjectURL(blob);
       setAudioUrl(url);
       setActiveStep("voice");
-      toast.success("Lesson narration audio generated!");
+      toast.success("Kokoro-82M neural speech narration generated!");
     } catch (err: any) {
       toast.error(err?.message || "Voice narration unavailable.");
     } finally {
-      setIsLoading(false);
+      setIsSynthesizingVoice(false);
     }
   };
 
@@ -153,8 +173,17 @@ export function LearningCycleModal({
       setIsPlayingAudio(false);
     } else {
       audioRef.current.playbackRate = voiceSpeed;
-      audioRef.current.play();
-      setIsPlayingAudio(true);
+      const playPromise = audioRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => setIsPlayingAudio(true))
+          .catch((err) => {
+            console.warn("Audio play issue:", err);
+            setIsPlayingAudio(false);
+          });
+      } else {
+        setIsPlayingAudio(true);
+      }
     }
   };
 
@@ -314,8 +343,12 @@ export function LearningCycleModal({
         {/* Top Header */}
         <div className="px-6 py-4 border-b border-surface-border flex items-center justify-between bg-white/60 backdrop-blur-md">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-2xl bg-[#252229] flex items-center justify-center text-white shadow-soft">
-              <Sparkles className="w-4 h-4 text-cyan-300" />
+            <div className="h-10 w-10 rounded-2xl bg-[#252229] flex items-center justify-center text-white shadow-soft p-1.5">
+              <img
+                src="/favicon-white-96x96.png"
+                alt="LearnWeave Favicon"
+                className="w-5 h-5 object-contain"
+              />
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -355,7 +388,12 @@ export function LearningCycleModal({
           </button>
 
           <button
-            onClick={() => setActiveStep("voice")}
+            onClick={() => {
+              setActiveStep("voice");
+              if (!audioUrl && !isSynthesizingVoice) {
+                handleSynthesizeVoice();
+              }
+            }}
             className={`px-3.5 py-1.5 rounded-full transition-all flex items-center gap-1.5 ${
               activeStep === "voice"
                 ? "bg-[#252229] text-white shadow-sm"
@@ -449,7 +487,7 @@ export function LearningCycleModal({
                     </div>
                   )}
 
-                  {lessonData?.content?.sections?.map((sec: any, idx: number) => (
+                  {(lessonData?.content?.sections || lessonData?.lesson_content?.sections)?.map((sec: any, idx: number) => (
                     <div
                       key={idx}
                       className="p-5 rounded-2xl bg-white border border-surface-border shadow-sm space-y-2 text-left"
@@ -458,10 +496,10 @@ export function LearningCycleModal({
                         <span className="w-5 h-5 rounded-md bg-black/5 text-[10px] flex items-center justify-center font-mono">
                           {idx + 1}
                         </span>
-                        {sec.title}
+                        {sec.title || sec.heading || `Section ${idx + 1}`}
                       </h3>
                       <div className="text-xs text-text/80 leading-relaxed whitespace-pre-line pl-7">
-                        {sec.explanation}
+                        {sec.explanation || sec.content}
                       </div>
 
                       {sec.cited_chunk_ids && sec.cited_chunk_ids.length > 0 && (
@@ -497,10 +535,20 @@ export function LearningCycleModal({
                   <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-surface-border">
                     <button
                       onClick={handleSynthesizeVoice}
-                      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-white hover:bg-black/5 border border-surface-border text-xs font-semibold text-ink transition-colors shadow-sm"
+                      disabled={isSynthesizingVoice}
+                      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-white hover:bg-black/5 border border-surface-border text-xs font-semibold text-ink transition-colors shadow-sm disabled:opacity-50"
                     >
-                      <Volume2 className="w-4 h-4 text-violet" />
-                      <span>Synthesize Voice Narration</span>
+                      {isSynthesizingVoice ? (
+                        <>
+                          <RotateCw className="w-4 h-4 animate-spin text-cyan-600" />
+                          <span>Synthesizing Voice...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Volume2 className="w-4 h-4 text-cyan-700" />
+                          <span>Synthesize Voice Narration</span>
+                        </>
+                      )}
                     </button>
 
                     <div className="flex items-center gap-2">
@@ -529,9 +577,40 @@ export function LearningCycleModal({
                     <Volume2 className="w-8 h-8" />
                   </div>
                   <div>
-                    <h3 className="text-lg font-bold text-ink">Kokoro Neural Speech</h3>
-                    <p className="text-xs text-muted mt-1">
-                      Listen to a clear explanation of {lesson.title}
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-50 border border-cyan-200 text-[11px] font-semibold text-cyan-900 mb-2">
+                      <Sparkles className="w-3.5 h-3.5 text-cyan-600" />
+                      <span>{audioEngine === "kokoro-82m" ? "⚡ Kokoro-82M Neural Model (24kHz Mono WAV)" : "Standard Synthesizer (24kHz WAV)"}</span>
+                    </div>
+                    <h3 className="text-lg font-bold text-ink">Neural Voice Narration</h3>
+                    <p className="text-xs text-muted mt-1 max-w-md mx-auto line-clamp-2">
+                      Listen to an articulate, synthesized spoken explanation of {lesson.title}
+                    </p>
+                  </div>
+
+                  {/* Voice Selector */}
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-2 text-xs">
+                    <label className="text-muted font-medium">Select Voice:</label>
+                    <select
+                      value={selectedVoice}
+                      onChange={(e) => setSelectedVoice(e.target.value)}
+                      disabled={isSynthesizingVoice}
+                      className="px-3 py-1.5 rounded-xl border border-surface-border bg-white text-ink text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-focus shadow-xs"
+                    >
+                      <option value="af_heart">Heart (Warm, Expressive · Female)</option>
+                      <option value="af_bella">Bella (Clear, Articulate · Female)</option>
+                      <option value="af_nicole">Nicole (Dynamic · Female)</option>
+                      <option value="am_adam">Adam (Conversational · Male)</option>
+                      <option value="am_michael">Michael (Engaging · Male)</option>
+                      <option value="bf_emma">Emma (British Accent · Female)</option>
+                      <option value="bm_george">George (Academic · Male)</option>
+                    </select>
+                  </div>
+
+                  {/* Narration Preview snippet */}
+                  <div className="p-3.5 rounded-2xl bg-[#F6F1EA] border border-surface-border text-left">
+                    <p className="text-[10px] font-bold text-muted uppercase tracking-wider mb-1">Narration Script</p>
+                    <p className="text-xs text-text/80 line-clamp-3 leading-relaxed italic">
+                      "{getNarrationText()}"
                     </p>
                   </div>
 
@@ -539,49 +618,85 @@ export function LearningCycleModal({
                     <audio
                       ref={audioRef}
                       src={audioUrl}
+                      onPlay={() => setIsPlayingAudio(true)}
+                      onPause={() => setIsPlayingAudio(false)}
                       onEnded={() => setIsPlayingAudio(false)}
-                      className="hidden"
+                      className="w-full mt-2"
+                      controls
                     />
                   )}
 
-                  <div className="flex items-center justify-center gap-4">
-                    <button
-                      onClick={toggleAudio}
-                      disabled={!audioUrl}
-                      className="h-14 w-14 rounded-full bg-[#252229] hover:bg-[#151318] text-white flex items-center justify-center shadow-lg transition-transform active:scale-95"
-                    >
-                      {isPlayingAudio ? (
-                        <Pause className="w-6 h-6" />
-                      ) : (
-                        <Play className="w-6 h-6 ml-1" />
-                      )}
-                    </button>
-                  </div>
-
-                  <div className="flex items-center justify-center gap-2 text-xs">
-                    <span className="text-muted font-medium">Speed:</span>
-                    {[0.75, 1, 1.25, 1.5].map((speed) => (
+                  {/* Action Controls */}
+                  <div className="flex flex-wrap items-center justify-center gap-3">
+                    {isSynthesizingVoice ? (
+                      <div className="flex items-center gap-2.5 px-6 py-3 rounded-full bg-cyan-100 text-cyan-900 text-xs font-semibold animate-pulse shadow-sm">
+                        <RotateCw className="w-4 h-4 animate-spin text-cyan-700" />
+                        <span>Kokoro-82M is synthesizing neural audio...</span>
+                      </div>
+                    ) : !audioUrl ? (
                       <button
-                        key={speed}
-                        onClick={() => {
-                          setVoiceSpeed(speed);
-                          if (audioRef.current) audioRef.current.playbackRate = speed;
-                        }}
-                        className={`px-2.5 py-1 rounded-lg font-mono text-[11px] font-semibold transition-colors ${
-                          voiceSpeed === speed
-                            ? "bg-[#252229] text-white"
-                            : "bg-black/5 text-muted hover:text-ink"
-                        }`}
+                        onClick={handleSynthesizeVoice}
+                        className="inline-flex items-center gap-2 px-7 py-3 rounded-full bg-[#252229] hover:bg-[#151318] text-white text-xs font-semibold shadow-md active:scale-95 transition-all"
                       >
-                        {speed}x
+                        <Volume2 className="w-4 h-4 text-cyan-300" />
+                        <span>Generate Kokoro Narration</span>
                       </button>
-                    ))}
+                    ) : (
+                      <>
+                        <button
+                          onClick={toggleAudio}
+                          className="h-14 w-14 rounded-full bg-[#252229] hover:bg-[#151318] text-white flex items-center justify-center shadow-lg transition-transform active:scale-95"
+                          title={isPlayingAudio ? "Pause Audio" : "Play Audio"}
+                        >
+                          {isPlayingAudio ? (
+                            <Pause className="w-6 h-6" />
+                          ) : (
+                            <Play className="w-6 h-6 ml-1" />
+                          )}
+                        </button>
+                        <button
+                          onClick={handleSynthesizeVoice}
+                          disabled={isSynthesizingVoice}
+                          className="px-4 py-2 rounded-full border border-surface-border bg-white hover:bg-black/5 text-xs font-semibold text-ink transition-colors shadow-xs"
+                        >
+                          Regenerate Voice
+                        </button>
+                      </>
+                    )}
                   </div>
 
-                  <div className="pt-4 border-t border-surface-border">
+                  {audioUrl && (
+                    <div className="flex items-center justify-center gap-2 text-xs">
+                      <span className="text-muted font-medium">Speed:</span>
+                      {[0.75, 1, 1.25, 1.5].map((speed) => (
+                        <button
+                          key={speed}
+                          onClick={() => {
+                            setVoiceSpeed(speed);
+                            if (audioRef.current) audioRef.current.playbackRate = speed;
+                          }}
+                          className={`px-2.5 py-1 rounded-lg font-mono text-[11px] font-semibold transition-colors ${
+                            voiceSpeed === speed
+                              ? "bg-[#252229] text-white"
+                              : "bg-black/5 text-muted hover:text-ink"
+                          }`}
+                        >
+                          {speed}x
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="pt-4 border-t border-surface-border flex items-center justify-between gap-3">
+                    <button
+                      onClick={() => setActiveStep("content")}
+                      className="px-4 py-2 rounded-full bg-black/5 hover:bg-black/10 text-xs font-semibold text-ink transition-colors"
+                    >
+                      Back to Content
+                    </button>
                     <button
                       onClick={() => setActiveStep("doubts")}
-                      className="px-6 py-2.5 rounded-full bg-[#252229] text-white text-xs font-semibold shadow-md"
+                      className="px-6 py-2.5 rounded-full bg-[#252229] text-white text-xs font-semibold shadow-md active:scale-95 transition-all"
                     >
                       Proceed to Doubt Resolution
                     </button>

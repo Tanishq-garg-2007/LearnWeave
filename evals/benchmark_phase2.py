@@ -11,7 +11,10 @@ backend_path = Path(__file__).resolve().parent.parent / "backend"
 sys.path.insert(0, str(backend_path))
 
 import httpx
+from sqlalchemy import delete
 from app.main import app
+from app.db.session import AsyncSessionLocal
+from app.db.models import AssessmentAttempt
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("evals.phase2")
@@ -239,24 +242,31 @@ async def run_benchmark():
         }, headers=headers_a)
         lesson_id = goal_res.json()["modules"][0]["lessons"][0]["id"]
 
-        quiz_res = await client.get(f"/api/v1/lessons/{lesson_id}/quiz", headers=headers_a)
+        quiz_res = await client.post(f"/api/v1/lessons/{lesson_id}/quiz", headers=headers_a)
+        assert quiz_res.status_code == 200, f"Quiz generation failed: {quiz_res.text}"
         assessment_id = quiz_res.json()["assessment_id"]
 
         # Run 10 submissions with exact same MCQ choices
         sub_scores = []
         for trial in range(10):
+            async with AsyncSessionLocal() as db:
+                await db.execute(delete(AssessmentAttempt).where(AssessmentAttempt.assessment_id == assessment_id))
+                await db.commit()
+
             sub = await client.post(
                 f"/api/v1/lessons/{lesson_id}/quiz/submit",
                 json={
+                    "assessment_id": assessment_id,
                     "answers": [
                         {"question_index": 0, "selected_option": "A"},
                         {"question_index": 1, "selected_option": "A"},
                         {"question_index": 2, "selected_option": "A"},
-                        {"question_index": 3, "written_answer": "Short answer response test"}
+                        {"question_index": 3, "written_answer": ""}
                     ]
                 },
                 headers=headers_a
             )
+            assert sub.status_code == 200, f"Submission failed with status {sub.status_code}: {sub.text}"
             sub_scores.append(sub.json()["mcq_score"])
 
         mcq_variance = max(sub_scores) - min(sub_scores)

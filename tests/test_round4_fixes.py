@@ -174,7 +174,8 @@ class _Req:
     class client: host = "1.2.3.4"
 
 
-def test_bug27_login_lockout_and_reset():
+def test_bug27_login_lockout_and_reset(monkeypatch):
+    monkeypatch.setattr(rl.settings, "RATE_LIMIT_ENABLED", True)
     rl.reset_all()
     for _ in range(rl.LOGIN_MAX_FAILURES):
         rl.check_login_allowed("A@x.com", _Req)

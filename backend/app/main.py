@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -38,6 +39,11 @@ async def lifespan(app: FastAPI):
         logger.warning(msg)
     else:
         logger.info(f"Groq primary model: {settings.GROQ_PRIMARY_MODEL} | Fallback: {settings.GROQ_FALLBACK_MODEL}")
+
+    # Warm up Kokoro neural speech engine in background
+    from app.services.tts_service import tts_service
+    asyncio.create_task(asyncio.to_thread(tts_service.initialize_kokoro))
+
     yield
     logger.info("Shutting down LearnWeave AI backend...")
 
@@ -62,6 +68,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Exception handlers
@@ -104,8 +111,21 @@ app.include_router(community_router, prefix="/api/v1")
 # Mount frontend production build if available
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import Scope
+from starlette.responses import Response
+
+class SPAStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as ex:
+            if ex.status_code == 404 and self.html and not path.startswith("api/") and not path.startswith("assets/"):
+                return await super().get_response("index.html", scope)
+            raise ex
 
 frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 if frontend_dist.exists():
-    app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
+    app.mount("/", SPAStaticFiles(directory=str(frontend_dist), html=True), name="frontend")
+
 

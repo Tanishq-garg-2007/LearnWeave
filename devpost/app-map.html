@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LearnWeave AI — Architecture App Map</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #131b2e;
+      --border: #1e293b;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #6366f1;
+      --primary-glow: rgba(99, 102, 241, 0.2);
+      --emerald: #10b981;
+      --amber: #f59e0b;
+      --code-bg: #0f172a;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text-main);
+      line-height: 1.6;
+      padding: 2.5rem 1.5rem;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    header {
+      margin-bottom: 2.5rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1.5rem;
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.75rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      background: var(--primary-glow);
+      color: var(--primary);
+      border: 1px solid var(--primary);
+      border-radius: 9999px;
+      margin-bottom: 0.75rem;
+    }
+    h1 {
+      font-size: 2.25rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.5rem;
+      color: #ffffff;
+    }
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 1.125rem;
+    }
+    section {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.75rem;
+      margin-bottom: 2rem;
+    }
+    h2 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: #e2e8f0;
+    }
+    p {
+      margin-bottom: 1rem;
+      color: #cbd5e1;
+    }
+    ul, ol {
+      margin-left: 1.5rem;
+      margin-bottom: 1rem;
+      color: #cbd5e1;
+    }
+    li { margin-bottom: 0.5rem; }
+    code {
+      font-family: "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+      font-size: 0.875rem;
+      background: var(--code-bg);
+      padding: 0.2rem 0.45rem;
+      border-radius: 4px;
+      color: #38bdf8;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    pre {
+      background: var(--code-bg);
+      padding: 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      margin-bottom: 1rem;
+      font-family: monospace;
+      font-size: 0.85rem;
+      color: #e2e8f0;
+    }
+    .diagram-card {
+      background: #0b1120;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.5rem;
+      text-align: center;
+      margin: 1.25rem 0;
+    }
+    .svg-diagram {
+      width: 100%;
+      max-width: 780px;
+      height: auto;
+    }
+    .route-stop {
+      border-left: 3px solid var(--primary);
+      padding-left: 1rem;
+      margin-bottom: 1.25rem;
+    }
+    .route-stop h3 {
+      font-size: 1.05rem;
+      color: #f1f5f9;
+      margin-bottom: 0.25rem;
+    }
+    details {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      margin-bottom: 0.75rem;
+    }
+    summary {
+      font-weight: 600;
+      cursor: pointer;
+      color: #cbd5e1;
+    }
+    details[open] summary {
+      margin-bottom: 0.5rem;
+      color: var(--primary);
+    }
+    .footer-note {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-top: 2rem;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="badge">Devpost Learn Skill Pack • App Map</div>
+      <h1>LearnWeave AI — Interactive Code Tour & Architecture</h1>
+      <p class="subtitle">A visual technical map tracing the student journey from learning target to local neural voice synthesis and adaptive curriculum revision.</p>
+    </header>
+
+    <!-- Overview Section -->
+    <section>
+      <h2>System Overview</h2>
+      <p>LearnWeave AI is an agentic personalized learning platform that structures education into <strong>2-week active sprint roadmaps</strong>, retrieves knowledge using <strong>Hybrid RAG (pgvector + FTS with Reciprocal Rank Fusion)</strong>, narrates lessons with <strong>sub-60ms local neural TTS (Kokoro-82M ONNX)</strong>, and evaluates mastery through a resilient <strong>6-step persistent state machine</strong>.</p>
+      
+      <div class="diagram-card">
+        <svg class="svg-diagram" viewBox="0 0 760 160" xmlns="http://www.w3.org/2000/svg">
+          <!-- Flow boxes -->
+          <rect x="10" y="50" width="130" height="60" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="2"/>
+          <text x="75" y="78" fill="#ffffff" font-size="12" font-family="sans-serif" font-weight="bold" text-anchor="middle">Goal &amp; Sprint</text>
+          <text x="75" y="95" fill="#94a3b8" font-size="10" font-family="sans-serif" text-anchor="middle">RoadmapAgent</text>
+
+          <line x1="140" y1="80" x2="165" y2="80" stroke="#6366f1" stroke-width="2" marker-end="url(#arrow)"/>
+
+          <rect x="170" y="50" width="130" height="60" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="2"/>
+          <text x="235" y="78" fill="#ffffff" font-size="12" font-family="sans-serif" font-weight="bold" text-anchor="middle">Hybrid RAG</text>
+          <text x="235" y="95" fill="#94a3b8" font-size="10" font-family="sans-serif" text-anchor="middle">pgvector + FTS RRF</text>
+
+          <line x1="300" y1="80" x2="325" y2="80" stroke="#6366f1" stroke-width="2"/>
+
+          <rect x="330" y="50" width="130" height="60" rx="8" fill="#1e293b" stroke="#10b981" stroke-width="2"/>
+          <text x="395" y="78" fill="#ffffff" font-size="12" font-family="sans-serif" font-weight="bold" text-anchor="middle">Local Neural TTS</text>
+          <text x="395" y="95" fill="#94a3b8" font-size="10" font-family="sans-serif" text-anchor="middle">Kokoro ONNX (55ms)</text>
+
+          <line x1="460" y1="80" x2="485" y2="80" stroke="#10b981" stroke-width="2"/>
+
+          <rect x="490" y="50" width="125" height="60" rx="8" fill="#1e293b" stroke="#f59e0b" stroke-width="2"/>
+          <text x="552" y="78" fill="#ffffff" font-size="12" font-family="sans-serif" font-weight="bold" text-anchor="middle">Quiz Evaluation</text>
+          <text x="552" y="95" fill="#94a3b8" font-size="10" font-family="sans-serif" text-anchor="middle">MCQs + Rubric LLM</text>
+
+          <line x1="615" y1="80" x2="635" y2="80" stroke="#f59e0b" stroke-width="2"/>
+
+          <rect x="640" y="50" width="110" height="60" rx="8" fill="#1e293b" stroke="#ec4899" stroke-width="2"/>
+          <text x="695" y="78" fill="#ffffff" font-size="12" font-family="sans-serif" font-weight="bold" text-anchor="middle">Adaptive Loop</text>
+          <text x="695" y="95" fill="#94a3b8" font-size="10" font-family="sans-serif" text-anchor="middle">Auto-remediation</text>
+        </svg>
+      </div>
+    </section>
+
+    <!-- Key Code Route -->
+    <section>
+      <h2>Architecture Route: Tracing One Complete Action</h2>
+      <p>Follow the path of a student initiating a lesson and receiving voice audio:</p>
+
+      <div class="route-stop">
+        <h3>Stop 1: State Machine Initialization &amp; Resumption</h3>
+        <p>File: <code>backend/app/services/learning_cycle_engine.py</code></p>
+        <p>Symbol: <code>LearningCycleEngine.start_cycle(lesson_id, user_id)</code></p>
+        <p>Creates or restores a persistent row in PostgreSQL table <code>cycle_runs</code> with state <code>lesson_gen</code>. If the client disconnects, <code>resume_cycle()</code> restores the state without re-generating LLM content.</p>
+      </div>
+
+      <div class="route-stop">
+        <h3>Stop 2: Hybrid RRF Knowledge Retrieval</h3>
+        <p>File: <code>backend/app/services/retrieval_service.py</code></p>
+        <p>Symbol: <code>RetrievalService.retrieve_relevant_chunks(query, user_id)</code></p>
+        <p>Calculates 384-d dense embeddings via local ONNX model and executes Reciprocal Rank Fusion ($k=60$) combining pgvector cosine distance and PostgreSQL tsvector keyword rank.</p>
+      </div>
+
+      <div class="route-stop">
+        <h3>Stop 3: Local Neural Voice Synthesis (Kokoro-82M)</h3>
+        <p>File: <code>backend/app/services/voice_service.py</code></p>
+        <p>Symbol: <code>VoiceService.synthesize_speech(text)</code></p>
+        <p>Passes lesson text to Kokoro-82M ONNX model. Synthesizes pristine 24kHz mono 16-bit PCM WAV audio in ~55ms without third-party network API calls.</p>
+      </div>
+    </section>
+
+    <!-- Pointers -->
+    <section>
+      <h2>"To Change This, Start Here"</h2>
+      
+      <details>
+        <summary>To adjust the 2-week active sprint duration or pacing constraints</summary>
+        <p>Navigate to <code>backend/app/agents/roadmap_agent.py</code>. Look for the constraint prompt and the <code>sanitize_roadmap()</code> method which limits detailed lessons to Weeks 1 and 2 and sets <code>is_planned_later = True</code> for subsequent weeks.</p>
+      </details>
+
+      <details>
+        <summary>To customize quiz grading rubrics or passing thresholds</summary>
+        <p>Navigate to <code>backend/app/agents/evaluation_agent.py</code>. The passing score threshold is currently set to <code>70.0</code>. Modifying this threshold changes when <code>AdaptiveAgent</code> inserts a remediation lesson.</p>
+      </details>
+
+      <details>
+        <summary>To change the local neural voice or speech rate</summary>
+        <p>Navigate to <code>backend/app/services/voice_service.py</code>. Adjust the Kokoro-82M ONNX voice style tokens or audio sampling configuration.</p>
+      </details>
+
+      <details>
+        <summary>To alter the UI theme or learning cycle modal layout</summary>
+        <p>Navigate to <code>frontend/src/components/LearningCycleModal.tsx</code> for the 6-step cycle UI, or <code>frontend/src/components/RoadmapView.tsx</code> for the sprint visualizer.</p>
+      </details>
+    </section>
+
+    <!-- Reusable Engineering Practice -->
+    <section>
+      <h2>A Practice to Reuse: State Machine Decoupling with Deterministic Guards</h2>
+      <p>Many AI applications rely on unbounded prompt loops (having LLMs call other LLMs repeatedly), which leads to compounding latency, high costs, and fragile failures. LearnWeave demonstrates a robust alternative:</p>
+      <ul>
+        <li><strong>Persistent Finite State Machines:</strong> Store state explicitly in a database (<code>cycle_runs</code>) so user sessions are resilient to disconnects and page refreshes.</li>
+        <li><strong>In-Memory Deterministic Sanitizers:</strong> Instead of asking an LLM to re-generate an entire payload when schema constraints are violated, use fast, zero-cost deterministic Python validators to sanitize and enforce business invariants.</li>
+        <li><strong>Local Edge Acceleration:</strong> Use lightweight ONNX models (Kokoro-82M for audio, all-MiniLM-L6-v2 for vectors) to deliver instantaneous response times (55ms) for latency-critical tasks while keeping cloud LLMs reserved for high-reasoning tasks.</li>
+      </ul>
+    </section>
+
+    <!-- Run Instructions -->
+    <section>
+      <h2>How to Run Locally</h2>
+      <pre><code># 1. Start database container
+docker compose up -d
+
+# 2. Run backend migrations &amp; start server
+alembic upgrade head
+uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+
+# 3. Start frontend interface
+cd frontend &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
+      <p style="font-size: 0.9rem; color: var(--text-muted); margin-top: 0.5rem;">Snapshot verified against source commit <code>254d110</code>. Passes all 19 automated test suites in Pytest.</p>
+    </section>
+
+    <div class="footer-note">
+      LearnWeave AI • Built for Devpost Build With AI: Basics • Team Omnitrix
+    </div>
+  </div>
+</body>
+</html>

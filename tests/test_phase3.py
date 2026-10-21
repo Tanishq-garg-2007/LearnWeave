@@ -152,6 +152,7 @@ async def test_adaptive_replanning_remediation():
             "total_duration_weeks": 2,
             "hours_per_week": 4.0
         }, headers=headers)
+        assert g_res.status_code == 201, f"Failed to create goal: {g_res.text}"
         roadmap = g_res.json()
         lesson_id = roadmap["modules"][0]["lessons"][0]["id"]
         initial_lesson_count = len(roadmap["modules"][0]["lessons"])

@@ -14,16 +14,32 @@ logger = logging.getLogger("learnweave.tts")
 class TTSService:
     """Centralized Text-to-Speech service with Kokoro-82M support and valid WAV fallback."""
     def __init__(self):
-        self.model_path = Path(settings.KOKORO_MODEL_PATH)
-        self.voices_path = Path(settings.KOKORO_VOICES_PATH)
+        self._root = Path(__file__).resolve().parent.parent.parent.parent
+        self._find_model_paths()
         self._kokoro = None
         self._initialized = False
+
+    def _find_model_paths(self):
+        candidates_model = [
+            Path(settings.KOKORO_MODEL_PATH),
+            self._root / settings.KOKORO_MODEL_PATH,
+            self._root / "backend" / settings.KOKORO_MODEL_PATH,
+        ]
+        self.model_path = next((p for p in candidates_model if p.exists()), candidates_model[0])
+
+        candidates_voices = [
+            Path(settings.KOKORO_VOICES_PATH),
+            self._root / settings.KOKORO_VOICES_PATH,
+            self._root / "backend" / settings.KOKORO_VOICES_PATH,
+        ]
+        self.voices_path = next((p for p in candidates_voices if p.exists()), candidates_voices[0])
 
     def initialize_kokoro(self) -> Tuple[bool, float]:
         """Attempt to load Kokoro-82M ONNX model. Returns (success, load_time_seconds)."""
         t0 = time.time()
         try:
-            if not self.model_path.exists():
+            self._find_model_paths()
+            if not self.model_path.exists() or not self.voices_path.exists():
                 logger.info(f"Kokoro weights not found at {self.model_path}. Using standard WAV synthesizer.")
                 return False, time.time() - t0
 
@@ -31,7 +47,7 @@ class TTSService:
             self._kokoro = Kokoro(str(self.model_path), str(self.voices_path))
             self._initialized = True
             load_time = time.time() - t0
-            logger.info(f"Kokoro-82M loaded in {load_time:.3f}s")
+            logger.info(f"Kokoro-82M loaded in {load_time:.3f}s from {self.model_path}")
             return True, load_time
         except Exception as exc:
             logger.warning(f"Kokoro-82M initialization skipped/failed: {exc}. Falling back to standard audio generator.")
@@ -43,6 +59,9 @@ class TTSService:
         Returns: (wav_bytes, generation_time_seconds, engine_used)
         """
         t0 = time.time()
+
+        if not self._initialized:
+            self.initialize_kokoro()
 
         if self._initialized and self._kokoro is not None:
             try:
