@@ -18,6 +18,9 @@ logger = logging.getLogger("learnweave.evaluation_agent")
 
 PASS_THRESHOLD = 0.70
 SHORT_ANSWER_PASS = 0.70
+# A quiz only passes if the short answer reaches this score too. Without it, three correct MCQs
+# (0.75 overall) pass even when the short answer is left blank. 0.40 is the rubric's "partial understanding" band.
+SHORT_ANSWER_MIN_FOR_PASS = 0.40
 MAX_ATTEMPTS_PER_ASSESSMENT = 3
 MAX_RESPONSE_CHARS = 2000   # also enforced by StudentAnswer.written_answer (422 above this)
 MIN_RESPONSE_CHARS = 8
@@ -54,6 +57,11 @@ def wrap_student_text(text: str) -> str:
     """Delimit student text as data. Tags inside the text are removed so it cannot close the block early."""
     cleaned = _STUDENT_TAG.sub("", text)[:MAX_RESPONSE_CHARS]
     return f"<student_response>\n{cleaned}\n</student_response>"
+
+
+def is_passing(overall_score: float, short_answer_score: float) -> bool:
+    """A quiz passes only when the overall score meets PASS_THRESHOLD and the short answer meets its minimum."""
+    return overall_score >= PASS_THRESHOLD and short_answer_score >= SHORT_ANSWER_MIN_FOR_PASS
 
 
 class EvaluationAgent:
@@ -153,7 +161,7 @@ class EvaluationAgent:
         # Overall Score: 75% MCQs (25% each for 3 MCQs) + 25% Short Answer
         avg_mcq = (sum(mcq_scores) / len(mcq_scores)) if mcq_scores else 0.0
         overall_score = round(0.75 * avg_mcq + 0.25 * short_answer_score, 2)
-        passed = overall_score >= PASS_THRESHOLD
+        passed = is_passing(overall_score, short_answer_score)
 
         # Mastery and weak areas are keyed by the topic lesson (a revision counts towards the lesson it revises).
         topic_lesson = await topic_lesson_for(db, lesson)
