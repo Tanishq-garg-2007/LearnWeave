@@ -46,6 +46,20 @@ export default {
         soft: "0 8px 30px -4px rgba(37, 34, 41, 0.06), 0 4px 12px -2px rgba(37, 34, 41, 0.04)",
         glass: "0 16px 40px -12px rgba(37, 34, 41, 0.08), 0 4px 12px -2px rgba(37, 34, 41, 0.03)",
       },
+      keyframes: {
+        float: {
+          "0%, 100%": { transform: "translateY(0px)" },
+          "50%": { transform: "translateY(-6px)" },
+        },
+        "float-delayed": {
+          "0%, 100%": { transform: "translateY(0px)" },
+          "50%": { transform: "translateY(6px)" },
+        },
+      },
+      animation: {
+        float: "float 6s ease-in-out infinite",
+        "float-delayed": "float-delayed 7s ease-in-out infinite 1s",
+      },
     },
   },
   plugins: [],
