@@ -302,9 +302,12 @@ export function LearningCycleModal({
             written_answer: shortAnswer.trim() || "No answer provided",
           };
         }
+        const selected = mcqAnswers[String(q.question_index)];
+        // An unanswered MCQ goes without an option, so the server grades it as wrong.
+        // Never default to a letter: that credits "A" for a question the student skipped.
         return {
           question_index: q.question_index,
-          selected_option: mcqAnswers[String(q.question_index)] || "A",
+          ...(selected ? { selected_option: selected } : {}),
         };
       });
 

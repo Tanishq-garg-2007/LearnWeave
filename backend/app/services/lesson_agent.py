@@ -41,6 +41,18 @@ LESSON_SCHEMA: Dict[str, Any] = {
 }
 
 
+def merge_lesson_content(existing: Any, generated: Dict[str, Any]) -> Dict[str, Any]:
+    """Store generated lesson content without dropping metadata the lesson already carries.
+
+    A remedial revision keeps its source link (REMEDIAL_KEY) and a planned revision keeps
+    is_revision. Replacing the whole dict silently drops both, so the revision stops counting
+    towards the lesson it revises. Keys from the generated content win on conflict.
+    """
+    merged: Dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+    merged.update(generated)
+    return merged
+
+
 class LessonAgent:
     """
     Pedagogical Lesson Generation Agent.
@@ -132,7 +144,7 @@ class LessonAgent:
         # Persist only complete, authoritative content. If note retrieval was degraded the
         # grounding decision may be wrong, so leave the lesson uncached and regenerate later.
         if not retrieval.degraded:
-            lesson.lesson_content = content.model_dump()
+            lesson.lesson_content = merge_lesson_content(lesson.lesson_content, content.model_dump())
         if lesson.status in ("pending", "not_started"):
             await set_lesson_status(db, user.id, lesson, "in_progress")
         await db.commit()
