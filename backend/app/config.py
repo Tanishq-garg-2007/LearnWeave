@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     GROQ_MAX_TPM: int = 8000
     GROQ_TOTAL_DEADLINE_SECONDS: int = 90
 
+    # Google AI Studio / Gemini Settings (Hosted 384-d Embeddings & Neural TTS)
+    GEMINI_API_KEY: str = ""
+    GEMINI_EMBEDDING_MODEL: str = "models/gemini-embedding-001"
+    GEMINI_TTS_MODEL: str = "models/gemini-2.5-flash-preview-tts"
+    TTS_ENGINE: str = "auto"
+
     # PostgreSQL Database (local-development defaults only; non-development
     # environments refuse to start with the default credentials, see _check_security)
     POSTGRES_USER: str = "postgres"

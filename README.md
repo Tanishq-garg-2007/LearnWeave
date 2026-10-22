@@ -1,3 +1,13 @@
+---
+title: LearnWeave AI
+emoji: 🧠
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # LearnWeave AI — Agentic Personalized Learning Platform
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)

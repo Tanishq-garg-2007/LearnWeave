@@ -16,6 +16,9 @@ pypdf>=4.3.0
 soundfile>=0.12.1
 numpy>=1.26.0
 kokoro-onnx>=0.6.0
+fastembed>=0.3.0
+onnxruntime>=1.19.0
 # python-jose 3.3.x has known security advisories; 3.4.0 is the first fixed release.
 python-jose[cryptography]>=3.4.0
 bcrypt>=4.0.0
+

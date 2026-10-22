@@ -2,7 +2,8 @@ import hashlib
 import logging
 import math
 import threading
-from typing import List
+from typing import List, Optional
+import httpx
 import numpy as np
 from app.config import settings
 
@@ -10,7 +11,7 @@ logger = logging.getLogger("learnweave.embeddings")
 
 
 class EmbeddingService:
-    """Local, high-speed sentence embeddings using all-MiniLM-L6-v2."""
+    """Hybrid sentence embedding service: Google AI Studio hosted (384-d) with FastEmbed & local fallback."""
 
     def __init__(self):
         self.model_name = "sentence-transformers/all-MiniLM-L6-v2"
@@ -37,24 +38,78 @@ class EmbeddingService:
         return self._model
 
     def warm_up(self) -> bool:
-        """Load the model if it is not loaded yet. The first load can take seconds, so call this from a worker thread."""
+        """Load the model if it is not loaded yet."""
+        if settings.GEMINI_API_KEY:
+            return True
         return self._get_model() is not None
 
     def embed_text(self, text: str) -> List[float]:
         """Compute 384-dimensional embedding vector for a single query or chunk."""
         return self.embed_documents([text])[0]
 
+    def _embed_with_gemini(self, texts: List[str]) -> Optional[List[List[float]]]:
+        """Fetch 384-d Matryoshka embeddings from Google AI Studio / Gemini API."""
+        if not settings.GEMINI_API_KEY:
+            return None
+
+        model = settings.GEMINI_EMBEDDING_MODEL.strip()
+        if not model.startswith("models/"):
+            model = f"models/{model}"
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/{model}:batchEmbedContents?key={settings.GEMINI_API_KEY}"
+
+        # Google Gemini batchEmbedContents accepts up to 100 texts per batch
+        batch_size = 100
+        all_embeddings: List[List[float]] = []
+
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                for i in range(0, len(texts), batch_size):
+                    batch = texts[i:i + batch_size]
+                    requests = [
+                        {
+                            "model": model,
+                            "content": {"parts": [{"text": t}]},
+                            "outputDimensionality": self.dimension,
+                        }
+                        for t in batch
+                    ]
+                    resp = client.post(url, json={"requests": requests})
+                    if resp.status_code != 200:
+                        logger.warning(f"Gemini embedding API returned status {resp.status_code}: {resp.text[:200]}")
+                        return None
+                    data = resp.json()
+                    embeds = data.get("embeddings", [])
+                    for e in embeds:
+                        vals = e.get("values", [])
+                        if len(vals) == self.dimension:
+                            all_embeddings.append(vals)
+                        else:
+                            logger.warning(f"Unexpected Gemini embedding length {len(vals)}, expected {self.dimension}")
+                            return None
+            return all_embeddings
+        except Exception as exc:
+            logger.warning(f"Gemini embedding request failed: {exc}. Falling back to local engine.")
+            return None
+
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """Batch compute embeddings for multiple text passages."""
+        # 1. Try Google AI Studio hosted embeddings first if configured
+        if settings.GEMINI_API_KEY:
+            gemini_embeds = self._embed_with_gemini(texts)
+            if gemini_embeds is not None and len(gemini_embeds) == len(texts):
+                return gemini_embeds
+
+        # 2. Try local FastEmbed model
         model = self._get_model()
         if model is not None:
             try:
                 raw_embeds = list(model.embed(texts))
                 return [arr.tolist() if hasattr(arr, "tolist") else list(arr) for arr in raw_embeds]
             except Exception as exc:
-                logger.warning(f"Embedding inference failed: {exc}. Using fallback projection.")
+                logger.warning(f"Local embedding inference failed: {exc}. Using fallback projection.")
 
-        # Deterministic semantic hash projection (dim=384, unit L2 normalized)
+        # 3. Deterministic semantic hash projection (dim=384, unit L2 normalized)
         vectors = []
         for text in texts:
             words = text.lower().split()
