@@ -582,7 +582,7 @@ export function LearningCycleModal({
                   <div>
                     <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-50 border border-cyan-200 text-[11px] font-semibold text-cyan-900 mb-2">
                       <Sparkles className="w-3.5 h-3.5 text-cyan-600" />
-                      <span>{audioEngine === "kokoro-82m" ? "⚡ Kokoro-82M Neural Model (24kHz Mono WAV)" : "Standard Synthesizer (24kHz WAV)"}</span>
+                      <span>{audioEngine === "kokoro-82m" ? "Google-TTS model" : "Standard Synthesizer"}</span>
                     </div>
                     <h3 className="text-lg font-bold text-ink">Neural Voice Narration</h3>
                     <p className="text-xs text-muted mt-1 max-w-md mx-auto line-clamp-2">
